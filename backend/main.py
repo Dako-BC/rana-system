@@ -47,7 +47,13 @@ if not anthropic_api_key:
         "ANTHROPIC_API_KEY tidak ditemukan. Pastikan backend/.env ada dan file tersebut dimuat, atau set env var ini sebelum menjalankan backend."
     )
 
-client = anthropic.Anthropic(api_key=anthropic_api_key)
+api_key = os.environ.get("ANTHROPIC_API_KEY")
+if not api_key:
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY tidak ditemukan. "
+        "Pastikan variable sudah diset di Railway Variables."
+    )
+client = anthropic.Anthropic(api_key=api_key)
 
 # ─────────────────────────────────────────────
 # MEMORY STORE (in-memory, ganti Redis untuk prod)
