@@ -5,6 +5,7 @@ Deploy: Railway / Render (free tier)
 """
 
 import os
+import re
 import json
 import uuid
 import asyncio
@@ -107,6 +108,13 @@ PRINSIP:
 - Semua keputusan berbasis pain point & decision trigger
 - Output harus actionable, bukan teori
 - Jika ragu, minta clarifikasi ke user
+OUTPUT `summary_untuk_user` — WAJIB DIISI:
+- Field `summary_untuk_user` di setiap JSON output Rana TIDAK boleh kosong, null, atau berisi placeholder.
+- Tulis dalam Bahasa Indonesia yang santai dan mudah dipahami oleh non-marketer.
+- Struktur ringkasan: (1) apa yang sudah dikerjakan agent, (2) insight atau keputusan paling penting, (3) apa yang perlu dilakukan user selanjutnya.
+- Maksimal 5 kalimat. Hindari jargon teknis marketing.
+- Contoh yang BAIK: "Hara sudah menemukan bahwa target utamamu adalah profesional muda yang takut tampil di depan umum. Bombom dan Luna sudah membuat 10 konsep image ads dan 4 konsep video. Rana memilih 3 image ads terbaik yang fokus pada transformasi percaya diri. Kamu perlu review pilihan ini dan kasih tahu tim produksi mana yang mau diprioritaskan."
+- Contoh yang BURUK: "Ringkasan hasil tersedia." atau summary yang hanya mengulang nama agent tanpa insight.
 
 Respond dalam Bahasa Indonesia. Format output kamu selalu dalam JSON.
 
@@ -145,7 +153,17 @@ OUTPUT WAJIB dalam JSON dengan struktur ini:
 }
 
 Berikan data yang spesifik, konkret, dan bisa langsung dipakai untuk iklan.
-Sertakan LOGIKA di balik setiap insight."""
+Sertakan LOGIKA di balik setiap insight.
+
+NICHE AWARENESS:
+- Baca `product_context` yang diberikan user dengan seksama sebelum menganalisis.
+- Sistem ini tidak terbatas pada produk kecantikan. Produk bisa berupa kursus, layanan, SaaS, coaching, atau kategori lainnya.
+- Jika produk adalah kursus atau program pelatihan (misal: public speaking course, business coaching, online class), sesuaikan:
+  - Pain point: fokus pada hambatan karir, rasa tidak percaya diri, atau skill gap — bukan masalah kulit
+  - Decision trigger: transformasi profesional, pengakuan sosial, peluang kerja/bisnis
+  - Larangan angka spesifik tetap berlaku; klaim manfaat harus sesuai konteks produk yang diberikan
+- Jangan asumsikan niche produk. Inferensikan dari product_context.
+"""
 
 BOMBOM_SYSTEM = """Kamu adalah Bombom, spesialis static ads / image hook.
 
@@ -174,7 +192,18 @@ LARANGAN KERAS:
 - Gunakan placeholder seperti "ribuan wanita", "growing community", atau "[masukkan data real]"
 - Statistik hanya boleh dipakai kalau ada di konteks produk yang diberikan user
 - Jangan gunakan frasa "skip dokter", "jangan pilih prosedur invasif", atau framing apapun yang memposisikan produk VERSUS treatment medis — produk ini COMPLEMENT, bukan pengganti
-- Jangan gunakan klaim usia spesifik seperti "5 tahun lebih muda" atau "10 tahun lebih muda" — ganti dengan benefit konkret seperti "kulit lebih firm", "fine lines berkurang", "tampil lebih segar & glowing\""""
+- Jangan gunakan klaim usia spesifik seperti "5 tahun lebih muda" atau "10 tahun lebih muda" — ganti dengan benefit konkret seperti "kulit lebih firm", "fine lines berkurang", "tampil lebih segar & glowing"
+- Jangan gunakan framing atau visual yang spesifik untuk produk kecantikan jika produk yang diberikan bukan produk kecantikan
+
+NICHE AWARENESS:
+- Baca `product_context` yang diberikan user dengan seksama sebelum menganalisis.
+- Sistem ini tidak terbatas pada produk kecantikan. Produk bisa berupa kursus, layanan, SaaS, coaching, atau kategori lainnya.
+- Jika produk adalah kursus atau program pelatihan (misal: public speaking course, business coaching, online class), sesuaikan:
+  - Pain point: fokus pada hambatan karir, rasa tidak percaya diri, atau skill gap — bukan masalah kulit
+  - Decision trigger: transformasi profesional, pengakuan sosial, peluang kerja/bisnis
+  - Larangan angka spesifik tetap berlaku; klaim manfaat harus sesuai konteks produk yang diberikan
+- Jangan asumsikan niche produk. Inferensikan dari product_context.
+"""
 
 LUNA_SYSTEM = """Kamu adalah Luna, spesialis video concept ads.
 
@@ -210,7 +239,20 @@ OUTPUT dalam JSON:
       }
     }
   ]
-}"""
+}
+
+CATATAN PRODUKSI:
+- Jangan gunakan framing atau visual yang spesifik untuk produk kecantikan jika produk yang diberikan bukan produk kecantikan.
+
+NICHE AWARENESS:
+- Baca `product_context` yang diberikan user dengan seksama sebelum menganalisis.
+- Sistem ini tidak terbatas pada produk kecantikan. Produk bisa berupa kursus, layanan, SaaS, coaching, atau kategori lainnya.
+- Jika produk adalah kursus atau program pelatihan (misal: public speaking course, business coaching, online class), sesuaikan:
+  - Pain point: fokus pada hambatan karir, rasa tidak percaya diri, atau skill gap — bukan masalah kulit
+  - Decision trigger: transformasi profesional, pengakuan sosial, peluang kerja/bisnis
+  - Larangan angka spesifik tetap berlaku; klaim manfaat harus sesuai konteks produk yang diberikan
+- Jangan asumsikan niche produk. Inferensikan dari product_context.
+"""
 
 HAGEN_SYSTEM = """Kamu adalah Hagen, execution agent untuk video production.
 
@@ -287,6 +329,16 @@ def call_claude_stream(system: str, user_message: str, max_tokens: int = 2000):
             yield text
 
 
+def strip_json_fence(text: str) -> str:
+    """Hapus markdown code fence ```json ... ``` dari output LLM."""
+    if not isinstance(text, str):
+        return text
+    text = text.strip()
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    return text.strip()
+
+
 # ─────────────────────────────────────────────
 # NODES — setiap agent adalah satu node
 # ─────────────────────────────────────────────
@@ -336,8 +388,9 @@ Produk: {state['product_context']}
 Lakukan riset mendalam dan hasilkan analisis market yang komprehensif."""
 
     result = call_claude(HARA_SYSTEM, prompt, max_tokens=4000)
-    return {"hara_output": result, "current_step": "rana_validates_hara",
-            "messages": [{"role": "assistant", "content": f"[HARA] {result}"}]}
+    cleaned_result = strip_json_fence(result)
+    return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
+            "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
 
 def rana_validate_hara(state: AgentState) -> StateUpdate:
@@ -346,7 +399,7 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "Belum ada."
     system = RANA_SYSTEM.format(learning_context=learning)
 
-    prompt = f"""Output dari Hara (Research Agent):
+    prompt = f"""Output dari Hara(Research Agent):
 {state['hara_output']}
 
 Validasi output ini. Apakah insight cukup kuat untuk dijadikan dasar iklan?
@@ -366,7 +419,7 @@ Format JSON:
 
 def bombom_create_ads(state: AgentState) -> StateUpdate:
     """Bombom membuat konsep image ads"""
-    prompt = f"""Insight dari Hara (sudah divalidasi Rana):
+    prompt = f"""Insight dari Hara(sudah divalidasi Rana):
 {state['hara_output']}
 
 Produk: {state['product_context']}
@@ -374,13 +427,14 @@ Produk: {state['product_context']}
 Buat 10 konsep image ads yang powerful dengan stopping power tinggi."""
 
     result = call_claude(BOMBOM_SYSTEM, prompt, max_tokens=4000)
-    return {"bombom_output": result,
-            "messages": [{"role": "assistant", "content": f"[BOMBOM] {result}"}]}
+    cleaned_result = strip_json_fence(result)
+    return {"bombom_output": cleaned_result,
+            "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
 
 def luna_create_video(state: AgentState) -> StateUpdate:
     """Luna membuat konsep video"""
-    prompt = f"""Insight dari Hara (sudah divalidasi Rana):
+    prompt = f"""Insight dari Hara(sudah divalidasi Rana):
 {state['hara_output']}
 
 Produk: {state['product_context']}
@@ -388,8 +442,9 @@ Produk: {state['product_context']}
 Buat 3-5 konsep video ads dengan angle yang beragam."""
 
     result = call_claude(LUNA_SYSTEM, prompt, max_tokens=4000)
-    return {"luna_output": result,
-            "messages": [{"role": "assistant", "content": f"[LUNA] {result}"}]}
+    cleaned_result = strip_json_fence(result)
+    return {"luna_output": cleaned_result,
+            "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
 
 def rana_final_decision(state: AgentState) -> StateUpdate:
@@ -398,15 +453,15 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "Belum ada."
     system = RANA_SYSTEM.format(learning_context=learning)
 
-    prompt = f"""Output dari Bombom (Image Ads):
+    prompt = f"""Output dari Bombom(Image Ads):
 {state.get('bombom_output', 'Tidak ada')}
 
-Output dari Luna (Video Concept):
+Output dari Luna(Video Concept):
 {state.get('luna_output', 'Tidak ada')}
 
 Berikan keputusan final:
-1. Konsep image ads mana yang terbaik (pilih top 3)
-2. Konsep video mana yang terbaik (pilih top 2)  
+1. Konsep image ads mana yang terbaik(pilih top 3)
+2. Konsep video mana yang terbaik(pilih top 2)
 3. Apa yang butuh human review
 4. Rekomendasi next step
 
@@ -422,22 +477,23 @@ Format JSON:
 }}"""
 
     result = call_claude(system, prompt, max_tokens=2000)
+    cleaned_result = strip_json_fence(result)
 
     # Parse untuk cek apakah run_hagen
     run_hagen = False
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(cleaned_result)
         run_hagen = parsed.get("run_hagen", False)
     except:
         pass
 
-    return {"rana_decision": result, "run_hagen": run_hagen,
+    return {"rana_decision": cleaned_result, "run_hagen": run_hagen,
             "current_step": "hagen" if run_hagen else "done",
-            "messages": [{"role": "assistant", "content": f"[RANA FINAL] {result}"}]}
+            "messages": [{"role": "assistant", "content": f"[RANA FINAL] {cleaned_result}"}]}
 
 
 def hagen_execute(state: AgentState) -> StateUpdate:
-    """Hagen membuat script eksekusi (opsional)"""
+    """Hagen membuat script eksekusi(opsional)"""
     prompt = f"""Konsep video terbaik dari Luna:
 {state.get('luna_output', '')}
 
@@ -447,8 +503,9 @@ Keputusan Rana:
 Buat breakdown script detail untuk produksi."""
 
     result = call_claude(HAGEN_SYSTEM, prompt, max_tokens=4000)
-    return {"hagen_output": result, "current_step": "done",
-            "messages": [{"role": "assistant", "content": f"[HAGEN] {result}"}]}
+    cleaned_result = strip_json_fence(result)
+    return {"hagen_output": cleaned_result, "current_step": "done",
+            "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
 
 def route_after_rana_decision(state: AgentState) -> str:

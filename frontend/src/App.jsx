@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { runAgents, uploadFile, saveFeedback, clearMemory } from './lib/api.js'
 
@@ -25,6 +25,17 @@ function humanizeKey(key) {
   return key
     .replace(/_/g, ' ')
     .replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function getFriendlyErrorMessage(error) {
+  const normalized = String(error || '').toLowerCase()
+  if (/network|fetch|failed to fetch/.test(normalized)) {
+    return 'Tidak bisa terhubung ke sistem. Pastikan koneksi internetmu stabil, lalu coba lagi.'
+  }
+  if (/api|api_key|401|403/.test(normalized)) {
+    return 'Ada masalah dengan konfigurasi sistem. Hubungi tim teknis.'
+  }
+  return 'Terjadi kesalahan. Coba jalankan ulang — jika masih gagal, coba reset sesi dan mulai dari awal.'
 }
 
 function SummaryView({ data }) {
@@ -80,11 +91,11 @@ const AGENTS = {
 }
 
 const STEPS = [
-  { id: 'rana_init', agent: 'rana', label: 'Rana inisialisasi konteks' },
-  { id: 'hara', agent: 'hara', label: 'Hara riset market' },
-  { id: 'validate_hara', agent: 'rana', label: 'Rana validasi riset' },
-  { id: 'creative', agent: 'bombom', label: 'Bombom & Luna buat konten' },
-  { id: 'decision', agent: 'rana', label: 'Rana keputusan final' },
+  { id: 'rana_init', agent: 'rana', label: 'Rana memahami produk dan konteks bisnismu...' },
+  { id: 'hara', agent: 'hara', label: 'Hara mendalami siapa audiensmu dan apa yang mereka rasakan...' },
+  { id: 'validate_hara', agent: 'rana', label: 'Rana memeriksa kualitas riset sebelum dilanjutkan...' },
+  { id: 'creative', agent: 'bombom', label: 'Bombom & Luna sedang merancang konsep iklan terbaik...' },
+  { id: 'decision', agent: 'rana', label: 'Rana memilih konsep terkuat dan menyiapkan rekomendasinya...' },
 ]
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -148,8 +159,233 @@ function StepTracker({ currentStep, completed }) {
 
 function OutputCard({ agentKey, content, title }) {
   const [expanded, setExpanded] = useState(false)
+  const [showAllConcepts, setShowAllConcepts] = useState(false)
   const a = AGENTS[agentKey]
   const parsed = tryParseJson(content)
+
+  const renderParsedBody = () => {
+    if (!parsed) return null
+
+    if (agentKey === 'hara') {
+      const tm = parsed.target_market || {}
+      const cp = parsed.core_problem || {}
+      const dt = parsed.decision_trigger || {}
+      const faq = parsed.faq || []
+      const objections = parsed.objection || []
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* Target Market */}
+          {(tm.demografi || tm.psikografi || tm.fb_interest_targeting?.length) && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target Market</div>
+              {tm.demografi && <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}><strong>Demografi:</strong> {tm.demografi}</p>}
+              {tm.psikografi && <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}><strong>Psikografi:</strong> {tm.psikografi}</p>}
+              {tm.fb_interest_targeting?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  {tm.fb_interest_targeting.map((t, i) => (
+                    <span key={i} style={{ padding: '3px 10px', borderRadius: 20, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 11, color: 'var(--text-3)' }}>{t}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Pain Point */}
+          {cp.pain_point_utama && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pain Point Utama</div>
+              <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{cp.pain_point_utama}</p>
+              {cp.logika_kenapa_ini_masalah && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{cp.logika_kenapa_ini_masalah}</p>}
+            </div>
+          )}
+
+          {/* Decision Trigger */}
+          {dt.trigger && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Trigger Keputusan Beli</div>
+              <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{dt.trigger}</p>
+              {dt.penjelasan && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{dt.penjelasan}</p>}
+            </div>
+          )}
+
+          {/* FAQ */}
+          {faq.length > 0 && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>FAQ</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {faq.map((f, i) => (
+                  <div key={i}>
+                    <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Q: {f.pertanyaan}</p>
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>A: {f.jawaban}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Objection Handling */}
+          {objections.length > 0 && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Objection Handling</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {objections.map((o, i) => (
+                  <div key={i}>
+                    <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>⚡ {o.objeksi}</p>
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{o.handling}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Insight */}
+          {parsed.insight_untuk_iklan && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Insight untuk Iklan</div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.insight_untuk_iklan}</p>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    if (agentKey === 'bombom') {
+      const concepts = Array.isArray(parsed.konsep_ads) ? parsed.konsep_ads : []
+      const visibleConcepts = showAllConcepts ? concepts : concepts.slice(0, 3)
+      if (concepts.length === 0) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {visibleConcepts.map((item, index) => (
+            <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Konsep {index + 1}</div>
+              {item.hook && <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--bombom)', marginBottom: 8 }}>{item.hook}</div>}
+              {item.visual_idea && <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 10 }}>{item.visual_idea}</div>}
+              {item.primary_text && <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 10 }}>{item.primary_text}</div>}
+              {item.headline && (
+                <span style={{ display: 'inline-flex', padding: '4px 10px', borderRadius: 999, background: 'rgba(196,130,130,0.12)', color: 'var(--bombom)', fontSize: 12, fontWeight: 600 }}>
+                  {item.headline}
+                </span>
+              )}
+            </div>
+          ))}
+          {concepts.length > 3 && (
+            <button onClick={() => setShowAllConcepts(active => !active)} style={{
+              alignSelf: 'flex-start', padding: '10px 14px', background: 'none', border: '1px solid var(--border)', borderRadius: 10,
+              color: 'var(--text-2)', cursor: 'pointer', fontSize: 12
+            }}>
+              {showAllConcepts ? `Sembunyikan beberapa konsep` : `Lihat semua ${concepts.length} konsep`}
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    if (agentKey === 'luna') {
+      const videos = Array.isArray(parsed.konsep_video) ? parsed.konsep_video : []
+      if (videos.length === 0) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {videos.map((item, index) => {
+            const hook = item.hook_scene || {}
+            const bodyScenes = Array.isArray(item.body_scenes) ? item.body_scenes : []
+            const kp = item.kebutuhan_produksi || {}
+            return (
+              <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Konsep {item.nomor || index + 1}</div>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>{item.real_shoot ? 'Real Shoot' : 'Ilustrasi'}</span>
+                </div>
+                {item.angle_konten && <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--luna)', fontWeight: 600 }}>{item.angle_konten}</p>}
+
+                {/* Hook scene */}
+                {hook.deskripsi && (
+                  <div style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', marginBottom: 4 }}>Hook ({hook.durasi || '0-3 detik'})</div>
+                    <p style={{ margin: '0 0 4px', fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{hook.deskripsi}</p>
+                    {hook.dialog_atau_teks && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>&quot;{hook.dialog_atau_teks}&quot;</p>}
+                  </div>
+                )}
+
+                {/* Body scenes */}
+                {bodyScenes.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                    {bodyScenes.map((scene, sceneIndex) => (
+                      <div key={sceneIndex} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                        <strong style={{ color: 'var(--text-3)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>{scene.scene} ({scene.durasi})</strong>
+                        <br />{scene.isi}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {(kp.talent || kp.lokasi || kp.estimasi_durasi_total) && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    {kp.talent && <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>🎭 {kp.talent}</span>}
+                    {kp.lokasi && <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>📍 {kp.lokasi}</span>}
+                    {kp.estimasi_durasi_total && <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>⏱ {kp.estimasi_durasi_total}</span>}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
+
+    if (agentKey === 'hagen') {
+      const scenes = Array.isArray(parsed.script_breakdown) ? parsed.script_breakdown : []
+      const checklist = Array.isArray(parsed.production_checklist) ? parsed.production_checklist : []
+      if (!scenes.length && !checklist.length) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {scenes.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Script breakdown</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {scenes.map((scene, index) => (
+                  <div key={index} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 24, height: 24, borderRadius: '50%', background: `${a.color}20`, color: a.color, display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                      {scene.scene_number || index + 1}
+                    </div>
+                    <div style={{ flex: 1, background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 14 }}>
+                      {scene.durasi && <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>{scene.durasi}</div>}
+                      {scene.visual_direction && <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{scene.visual_direction}</p>}
+                      {scene.dialog && <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7, fontStyle: 'italic' }}>&quot;{scene.dialog}&quot;</p>}
+                      {scene.teks_onscreen && <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-3)' }}>Teks: {scene.teks_onscreen}</p>}
+                      {scene.audio && <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-3)' }}>Audio: {scene.audio}</p>}
+                      {scene.catatan_sutradara && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>🎬 {scene.catatan_sutradara}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {checklist.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Production checklist</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {checklist.map((item, index) => (
+                  <div key={index} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <span style={{ width: 18, height: 18, borderRadius: 4, background: 'var(--bg)', border: `1px solid ${a.color}`, display: 'grid', placeItems: 'center', fontSize: 12, color: a.color }}>
+                      ✓
+                    </span>
+                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{item}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return <SummaryView data={parsed} />
+  }
 
   return (
     <div style={{
@@ -175,16 +411,8 @@ function OutputCard({ agentKey, content, title }) {
           {parsed ? (
             <>
               <div style={{ marginBottom: 18 }}>
-                <SummaryView data={parsed} />
+                {renderParsedBody()}
               </div>
-              <details style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-                <summary style={{ cursor: 'pointer', color: 'var(--text-3)', fontSize: 12, marginBottom: 10 }}>
-                  Lihat detail JSON
-                </summary>
-                <div style={{ marginTop: 12 }}>
-                  <JsonViewer data={parsed} agentColor={a.color} />
-                </div>
-              </details>
             </>
           ) : (
             <pre style={{
@@ -376,6 +604,19 @@ function FeedbackBar({ sessionId, onDone }) {
 export default function App() {
   const sessionId = useRef(getSessionId()).current
   const [productContext, setProductContext] = useState('')
+  const [wizardStep, setWizardStep] = useState(1)
+  const [wizardForm, setWizardForm] = useState({
+    namaProduk: '',
+    kategori: '',
+    keunggulan: '',
+    targetAudience: '',
+    painPoint: '',
+    harga: '',
+    platform: [],
+    kompetitor: '',
+    catatan: ''
+  })
+  const [copyStatus, setCopyStatus] = useState('Salin semua output')
   const [uploadedFiles, setUploadedFiles] = useState([])
   const [runHagen, setRunHagen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -385,6 +626,72 @@ export default function App() {
   const [error, setError] = useState(null)
   const [showFeedback, setShowFeedback] = useState(false)
   const fileRef = useRef()
+
+  const buildProductContext = () => `
+Nama produk: ${wizardForm.namaProduk}
+Kategori: ${wizardForm.kategori}
+Keunggulan: ${wizardForm.keunggulan}
+Target audience: ${wizardForm.targetAudience}
+Pain point: ${wizardForm.painPoint}
+Harga: ${wizardForm.harga}
+Platform iklan: ${wizardForm.platform.join(', ')}
+Kompetitor: ${wizardForm.kompetitor}
+Catatan tambahan: ${wizardForm.catatan}
+`.trim()
+
+  useEffect(() => {
+    setProductContext(buildProductContext())
+  }, [wizardForm])
+
+  const handleFormChange = (field, value) => {
+    setWizardForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  const togglePlatform = (platform) => {
+    setWizardForm(prev => ({
+      ...prev,
+      platform: prev.platform.includes(platform)
+        ? prev.platform.filter(item => item !== platform)
+        : [...prev.platform, platform]
+    }))
+  }
+
+  const getExportText = () => {
+    const parts = []
+    if (result?.hara_output) parts.push('Hara - Market research & insight:\n' + result.hara_output)
+    if (result?.bombom_output) parts.push('Bombom - Konsep image ads:\n' + result.bombom_output)
+    if (result?.luna_output) parts.push('Luna - Konsep video ads:\n' + result.luna_output)
+    if (result?.rana_decision) parts.push('Rana - Keputusan final:\n' + result.rana_decision)
+    return parts.join('\n\n')
+  }
+
+  const handleCopyAll = async () => {
+    const text = getExportText()
+    if (!text) return
+    await navigator.clipboard.writeText(text)
+    setCopyStatus('✓ Tersalin!')
+    setTimeout(() => setCopyStatus('Salin semua output'), 2000)
+  }
+
+  const handleDownloadTxt = () => {
+    const text = getExportText()
+    if (!text) return
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `rana-output-${new Date().toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const stepOneValid = wizardForm.namaProduk.trim() && wizardForm.kategori.trim() && wizardForm.keunggulan.trim()
+  const stepTwoValid = wizardForm.targetAudience.trim() && wizardForm.painPoint.trim() && wizardForm.harga.trim()
+  const stepThreeValid = wizardForm.platform.length > 0
+  const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
+  const canRun = stepOneValid && stepTwoValid && stepThreeValid
 
   const handleFileUpload = useCallback(async (files) => {
     for (const file of Array.from(files)) {
@@ -482,27 +789,172 @@ export default function App() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20, position: 'sticky', top: 90 }}>
 
           {/* Input produk */}
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', display: 'block', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Konteks Produk
-            </label>
-            <textarea
-              value={productContext}
-              onChange={e => setProductContext(e.target.value)}
-              disabled={loading}
-              placeholder={`Ceritakan produkmu:\n— Nama & kategori produk\n— Target audience\n— Unique selling point\n— Kompetitor utama\n— Budget iklan & platform`}
-              rows={10}
-              style={{
-                width: '100%', background: 'var(--bg3)',
-                border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-                padding: '14px 16px', color: 'var(--text)',
-                fontFamily: 'var(--font-body)', fontSize: 13, resize: 'vertical',
-                outline: 'none', lineHeight: 1.7,
-                transition: 'border-color 0.2s',
-              }}
-              onFocus={e => e.target.style.borderColor = 'rgba(196,168,130,0.3)'}
-              onBlur={e => e.target.style.borderColor = 'var(--border)'}
-            />
+          <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-end', marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                  Konteks Produk
+                </div>
+                <div style={{ fontSize: 16, color: 'var(--text)', fontWeight: 700 }}>Isi informasi produk secara bertahap</div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                Langkah {wizardStep} dari 3
+              </div>
+            </div>
+
+            {wizardStep === 1 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Nama produk</label>
+                  <input
+                    value={wizardForm.namaProduk}
+                    onChange={e => handleFormChange('namaProduk', e.target.value)}
+                    disabled={loading}
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Kategori / niche</label>
+                  <input
+                    value={wizardForm.kategori}
+                    onChange={e => handleFormChange('kategori', e.target.value)}
+                    disabled={loading}
+                    placeholder="mis. kursus online, skincare, SaaS"
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Keunggulan utama produk</label>
+                  <textarea
+                    value={wizardForm.keunggulan}
+                    onChange={e => handleFormChange('keunggulan', e.target.value)}
+                    disabled={loading}
+                    placeholder="Apa yang bikin produkmu beda?"
+                    rows={4}
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none', resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {wizardStep === 2 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Siapa target pembelinya?</label>
+                  <input
+                    value={wizardForm.targetAudience}
+                    onChange={e => handleFormChange('targetAudience', e.target.value)}
+                    disabled={loading}
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Apa masalah terbesar mereka?</label>
+                  <textarea
+                    value={wizardForm.painPoint}
+                    onChange={e => handleFormChange('painPoint', e.target.value)}
+                    disabled={loading}
+                    placeholder="Pain point yang produkmu selesaikan"
+                    rows={4}
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none', resize: 'vertical' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Rentang harga produk</label>
+                  <input
+                    value={wizardForm.harga}
+                    onChange={e => handleFormChange('harga', e.target.value)}
+                    disabled={loading}
+                    placeholder="mis. Rp 500rb – Rp 2jt"
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {wizardStep === 3 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Platform iklan
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {['FB/IG Ads', 'TikTok Ads', 'YouTube Ads', 'Google Ads'].map(platform => (
+                      <button
+                        key={platform}
+                        type="button"
+                        onClick={() => togglePlatform(platform)}
+                        style={{
+                          padding: '12px 14px', borderRadius: '12px', border: `1px solid ${wizardForm.platform.includes(platform) ? 'var(--accent)' : 'var(--border)'}`,
+                          background: wizardForm.platform.includes(platform) ? 'rgba(196,168,130,0.15)' : 'var(--bg4)', color: 'var(--text)', cursor: 'pointer', textAlign: 'left', fontSize: 13
+                        }}
+                      >
+                        {platform}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Kompetitor utama</label>
+                  <input
+                    value={wizardForm.kompetitor}
+                    onChange={e => handleFormChange('kompetitor', e.target.value)}
+                    disabled={loading}
+                    placeholder="Opsional"
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Ada hal lain yang perlu Rana tahu?</label>
+                  <textarea
+                    value={wizardForm.catatan}
+                    onChange={e => handleFormChange('catatan', e.target.value)}
+                    disabled={loading}
+                    placeholder="Opsional"
+                    rows={4}
+                    style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none', resize: 'vertical' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 20 }}>
+              <button
+                type="button"
+                onClick={() => setWizardStep(prev => prev - 1)}
+                disabled={loading || wizardStep === 1}
+                style={{
+                  padding: '12px 16px', minWidth: 120,
+                  background: wizardStep === 1 ? 'var(--bg4)' : 'var(--bg3)',
+                  border: `1px solid ${wizardStep === 1 ? 'var(--border)' : 'var(--border)'}`,
+                  color: wizardStep === 1 ? 'var(--text-3)' : 'var(--text)',
+                  borderRadius: 'var(--radius)', cursor: wizardStep === 1 ? 'not-allowed' : 'pointer',
+                  fontFamily: 'var(--font-body)', fontSize: 13
+                }}
+              >
+                ← Kembali
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (wizardStep < 3) return setWizardStep(prev => prev + 1)
+                  handleRun()
+                }}
+                disabled={loading || (wizardStep < 3 ? !canProceed : !canRun)}
+                style={{
+                  flex: 1, padding: '12px 16px',
+                  background: loading || (wizardStep < 3 ? !canProceed : !canRun)
+                    ? 'var(--bg4)'
+                    : 'linear-gradient(135deg, rgba(196,168,130,0.2) 0%, rgba(196,168,130,0.1) 100%)',
+                  border: `1px solid ${loading || (wizardStep < 3 ? !canProceed : !canRun) ? 'var(--border)' : 'rgba(196,168,130,0.4)'}`,
+                  color: loading || (wizardStep < 3 ? !canProceed : !canRun) ? 'var(--text-3)' : 'var(--accent)',
+                  borderRadius: 'var(--radius)', fontSize: 14, fontWeight: 500, cursor: loading || (wizardStep < 3 ? !canProceed : !canRun) ? 'not-allowed' : 'pointer',
+                  fontFamily: 'var(--font-body)', letterSpacing: '0.01em'
+                }}
+              >
+                {wizardStep < 3 ? 'Lanjut →' : loading ? 'Menjalankan agents...' : '◆ Jalankan Sistem'}
+              </button>
+            </div>
           </div>
 
           {/* File upload */}
@@ -570,36 +1022,21 @@ export default function App() {
             </div>
           </div>
 
-          {/* Run button */}
-          <button
-            onClick={handleRun}
-            disabled={loading || !productContext.trim()}
-            style={{
-              padding: '14px 24px', width: '100%',
-              background: loading || !productContext.trim()
-                ? 'var(--bg4)'
-                : 'linear-gradient(135deg, rgba(196,168,130,0.2) 0%, rgba(196,168,130,0.1) 100%)',
-              border: `1px solid ${loading || !productContext.trim() ? 'var(--border)' : 'rgba(196,168,130,0.4)'}`,
-              color: loading || !productContext.trim() ? 'var(--text-3)' : 'var(--accent)',
-              borderRadius: 'var(--radius)', fontSize: 14, fontWeight: 500,
-              cursor: loading || !productContext.trim() ? 'not-allowed' : 'pointer',
-              fontFamily: 'var(--font-body)', transition: 'all 0.2s',
-              letterSpacing: '0.01em',
-            }}
-          >
-            {loading ? 'Menjalankan agents...' : '◆ Jalankan Sistem'}
-          </button>
-
           {error && (
             <div style={{
-              padding: '12px 14px', background: 'rgba(196,80,80,0.1)',
-              border: '1px solid rgba(196,80,80,0.3)', borderRadius: 8,
-              fontSize: 12, color: '#e07070', lineHeight: 1.6
+              padding: '18px 16px', background: 'rgba(196,80,80,0.08)',
+              border: '1px solid rgba(196,80,80,0.25)', borderRadius: 12,
+              fontSize: 13, color: 'var(--text)', lineHeight: 1.7
             }}>
-              <strong>Error:</strong> {error}<br />
-              <span style={{ color: 'var(--text-3)', fontSize: 11 }}>
-                Cek apakah backend sudah running & ANTHROPIC_API_KEY sudah di-set.
-              </span>
+              <div style={{ marginBottom: 12, color: 'var(--text)', fontSize: 13 }}>
+                {getFriendlyErrorMessage(error)}
+              </div>
+              <button onClick={handleRun} style={{
+                padding: '10px 16px', background: 'rgba(196,168,130,0.15)', border: '1px solid rgba(196,168,130,0.3)',
+                color: 'var(--rana)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-body)'
+              }}>
+                Coba lagi
+              </button>
             </div>
           )}
 
@@ -686,7 +1123,23 @@ export default function App() {
 
               {/* Rana decision — always first */}
               {result.rana_decision && (
-                <RanaDecisionCard content={result.rana_decision} />
+                <>
+                  <RanaDecisionCard content={result.rana_decision} />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
+                    <button onClick={handleCopyAll} style={{
+                      padding: '10px 16px', background: 'rgba(196,168,130,0.15)', border: '1px solid rgba(196,168,130,0.3)',
+                      color: 'var(--rana)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-body)'
+                    }}>
+                      {copyStatus}
+                    </button>
+                    <button onClick={handleDownloadTxt} style={{
+                      padding: '10px 16px', background: 'transparent', border: '1px solid var(--border)',
+                      color: 'var(--text)', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-body)'
+                    }}>
+                      Download sebagai .txt
+                    </button>
+                  </div>
+                </>
               )}
 
               {/* Hara output */}
