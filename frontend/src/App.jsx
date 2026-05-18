@@ -106,6 +106,21 @@ function getFriendlyErrorMessage(error) {
   return 'An error occurred. Try running again — if it still fails, reset the session and start over.'
 }
 
+function InlineMarkdown({ text, style }) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g)
+  return (
+    <span style={style}>
+      {parts.map((part, index) => {
+        const boldMatch = part.match(/^\*\*([^*]+)\*\*$/)
+        if (boldMatch) {
+          return <strong key={index} style={{ color: 'var(--text)' }}>{boldMatch[1]}</strong>
+        }
+        return <span key={index}>{part}</span>
+      })}
+    </span>
+  )
+}
+
 function SummaryView({ data }) {
   if (typeof data === 'string') {
     return <p style={{ margin: 0, color: 'var(--text)', fontSize: 13 }}>{data}</p>
@@ -155,7 +170,7 @@ const AGENTS = {
   hara: { name: 'Hara', role: 'Research', color: '#82c4a0', icon: '◎' },
   bombom: { name: 'Bombom', role: 'Image Ads', color: '#c48282', icon: '▣' },
   luna: { name: 'Luna', role: 'Video Concept', color: '#8299c4', icon: '◐' },
-  hagen: { name: 'Hagen', role: 'Eksekusi', color: '#c4b082', icon: '▷' },
+  hagen: { name: 'Hagen', role: 'Execution', color: '#c4b082', icon: '▷' },
 }
 
 const PROVIDER_LABELS = {
@@ -880,9 +895,7 @@ function OutputCard({ agentKey, content, title }) {
                   return (
                     <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '3px 0' }}>
                       <span style={{ color: a.color, fontSize: 14, lineHeight: 1.4, flexShrink: 0 }}>•</span>
-                      <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}
-                        dangerouslySetInnerHTML={{ __html: text.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                      />
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
                     </div>
                   )
                 }
@@ -894,9 +907,7 @@ function OutputCard({ agentKey, content, title }) {
                   return (
                     <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '3px 0' }}>
                       <span style={{ color: a.color, fontWeight: 700, fontSize: 12, flexShrink: 0, minWidth: 18 }}>{num}.</span>
-                      <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}
-                        dangerouslySetInnerHTML={{ __html: text.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                      />
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
                     </div>
                   )
                 }
@@ -908,9 +919,9 @@ function OutputCard({ agentKey, content, title }) {
 
                 // Render plain paragraphs.
                 return (
-                  <p key={i} style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}
-                    dangerouslySetInnerHTML={{ __html: trimmed.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                  />
+                  <p key={i} style={{ margin: 0 }}>
+                    <InlineMarkdown text={trimmed} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }} />
+                  </p>
                 )
               })}
             </div>
@@ -1302,8 +1313,8 @@ Additional notes: ${wizardForm.catatan}
       try {
         const res = await uploadFile(sessionId, file)
         setUploadedFiles(prev => [...prev, { name: file.name, preview: res.preview }])
-      } catch {
-        setError(`Upload failed: ${file.name}`)
+      } catch (error) {
+        setError(`Upload failed: ${file.name}. ${error.message}`)
       }
     }
   }, [sessionId])
@@ -1697,9 +1708,9 @@ Additional notes: ${wizardForm.catatan}
               <div style={{ fontSize: 24, marginBottom: 8 }}>↑</div>
               <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                 Drag & drop or click<br />
-                <span style={{ color: 'var(--text-3)', fontSize: 11 }}>PDF, TXT, DOCX</span>
+                <span style={{ color: 'var(--text-3)', fontSize: 11 }}>TXT, MD, CSV</span>
               </div>
-              <input ref={fileRef} id="fileUpload" name="fileUpload" type="file" multiple accept=".pdf,.txt,.doc,.docx"
+              <input ref={fileRef} id="fileUpload" name="fileUpload" type="file" multiple accept=".txt,.md,.csv"
                 onChange={e => handleFileUpload(e.target.files)} style={{ display: 'none' }} />
             </div>
             {uploadedFiles.map((f, i) => (
@@ -1921,7 +1932,7 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Hagen output (if exists) */}
               {result.hagen_output && (
-                <OutputCard agentKey="hagen" content={result.hagen_output} title="Script eksekusi video" />
+                <OutputCard agentKey="hagen" content={result.hagen_output} title="Video execution script" />
               )}
 
               {/* Additional input */}

@@ -33,9 +33,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Rana Multi-Agent System")
 
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "BACKEND_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace with the frontend domain in production.
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -259,6 +268,15 @@ PROMPT_FILES = {
     "bombom": "bombom.txt",
     "luna": "luna.txt",
     "hagen": "hagen.txt",
+}
+
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
+ALLOWED_UPLOAD_EXTENSIONS = {".txt", ".md", ".csv"}
+ALLOWED_UPLOAD_CONTENT_TYPES = {
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/octet-stream",
 }
 
 
@@ -1124,7 +1142,7 @@ def validate_product_context(product_context: str) -> None:
             status_code=400,
             detail=(
                 "Product context is incomplete or too short. "
-                f"Lengkapi field: {', '.join(missing)}."
+                f"Complete these fields: {', '.join(missing)}."
             ),
         )
 
@@ -1161,7 +1179,7 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
     if isinstance(api_err, anthropic.AuthenticationError):
         return HTTPException(
             status_code=401,
-            detail=f"Anthropic authentication failed. Cek ANTHROPIC_API_KEY. Detail: {message}",
+            detail=f"Anthropic authentication failed. Check ANTHROPIC_API_KEY. Detail: {message}",
         )
     if isinstance(api_err, anthropic.PermissionDeniedError):
         return HTTPException(
@@ -1172,7 +1190,7 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
         return HTTPException(
             status_code=429,
             detail=(
-                "Anthropic rate/quota limit reached. Ini bisa karena rate limit sementara, "
+                "Anthropic rate/quota limit reached. This can happen because of a temporary rate limit, "
                 f"credits/quota are exhausted, or the usage plan limit was reached. Detail: {message}. Body: {body}"
             ),
         )
@@ -1318,18 +1336,45 @@ async def upload_file(
     file: UploadFile = File(...)
 ):
     """Upload a product brief or document."""
+    filename = file.filename or "uploaded-file"
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported file type. Upload a plain text file: "
+                f"{', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}."
+            ),
+        )
+    if file.content_type and file.content_type not in ALLOWED_UPLOAD_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type: {file.content_type}."
+        )
+
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is too large. Maximum upload size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+        )
+
     text_content = content.decode("utf-8", errors="ignore")
+    if not is_meaningful_text(text_content, 20):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file does not contain enough readable text."
+        )
 
     if session_id not in session_memory:
         session_memory[session_id] = []
 
     # Store uploaded file text in session memory.
-    file_entry = f"[FILE: {file.filename}]\n{text_content[:3000]}"
+    file_entry = f"[FILE: {filename}]\n{text_content[:3000]}"
     session_memory[session_id].append({"role": "user", "content": file_entry})
     save_memory(session_id, session_memory[session_id])
 
-    return {"status": "ok", "file_name": file.filename, "preview": text_content[:200]}
+    return {"status": "ok", "file_name": filename, "preview": text_content[:200]}
 
 
 @app.post("/api/feedback")
