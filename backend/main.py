@@ -251,177 +251,36 @@ class AgentState(TypedDict):
 StateUpdate = dict[str, Any]
 
 
-# System prompts.
-RANA_SYSTEM = """You are Rana, the lead supervisor for this marketing AI system.
-
-TASKS:
-- Give each agent clear context.
-- Validate every output from Hara, Bombom, and Luna.
-- Judge quality: approved, revision needed, or rejected.
-- Decide which outputs should be used.
-- Decide whether human review is needed.
-
-LEARNING CONTEXT FROM PREVIOUS SESSIONS:
-{learning_context}
-
-PRINCIPLES:
-- Base every decision on pain points and decision triggers.
-- Make every output actionable, not theoretical.
-- Ask for clarification when needed, but still provide the best possible answer.
-
-`user_summary` IS REQUIRED:
-- This field must never be empty, null, or a placeholder.
-- Write in clear English for non-marketers.
-- Structure it as: what the agents did, the most important insight or decision, and what the user should do next.
-- Keep it to 5 sentences or fewer.
-
-Always respond in English. Always return valid JSON only.
-
-BRAND SAFETY:
-- Reject or flag concepts that position the product as a medical replacement.
-- Reject unsupported superlatives such as "best" or "only".
-- Flag concepts that may damage brand reputation.
-- Explain specific rejection reasons in the final decision."""
-
-HARA_SYSTEM = """You are Hara, an expert marketing research agent.
-
-TASK: Analyze the target market for the given product.
-
-REQUIRED JSON OUTPUT:
-{
-  "target_market": {
-    "demographics": "...",
-    "psychographics": "...",
-    "fb_interest_targeting": ["interest1", "interest2", "interest3"]
-  },
-  "core_problem": {
-    "main_pain_point": "...",
-    "problem_logic": "..."
-  },
-  "decision_trigger": {
-    "trigger": "...",
-    "penjelasan": "..."
-  },
-  "faq": [
-    {"question": "...", "answer": "..."}
-  ],
-  "objection": [
-    {"objection": "...", "handling": "..."}
-  ],
-  "ad_insight": "..."
+# System prompts live in plain text files so non-engineers can edit them.
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPT_FILES = {
+    "rana": "rana.txt",
+    "hara": "hara.txt",
+    "bombom": "bombom.txt",
+    "luna": "luna.txt",
+    "hagen": "hagen.txt",
 }
 
-Provide specific, concrete, ad-ready insights.
-Include the logic behind each insight.
 
-NICHE AWARENESS:
-- Read `product_context` carefully before analyzing.
-- The product can be beauty, education, service, SaaS, coaching, or another niche.
-- If the product is a course or training program, focus on career blockers, confidence, and skill gaps.
-- Never invent specific numbers; claims must come from the provided context.
-- Infer the niche from product_context instead of assuming it."""
+def load_prompt(agent_name: str) -> str:
+    filename = PROMPT_FILES.get(agent_name)
+    if not filename:
+        raise RuntimeError(f"Unknown prompt agent: {agent_name}")
 
-BOMBOM_SYSTEM = """You are Bombom, a specialist in static image ads and hooks.
+    prompt_path = PROMPTS_DIR / filename
+    try:
+        return prompt_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Prompt file not found for {agent_name}: {prompt_path}"
+        ) from exc
 
-INPUT: Hara insights validated by Rana.
 
-TASK: Create 10 powerful single-image ad concepts.
-
-JSON OUTPUT:
-{
-  "ad_concepts": [
-    {
-      "nomor": 1,
-      "visual_idea": "Detailed production-ready visual description",
-      "hook": "Main visual headline, max 10 words",
-      "primary_text": "2-3 sentence ad body focused on the pain point",
-      "headline": "Feed ad headline"
-    }
-  ],
-  "production_notes": "General production tips"
-}
-
-FOCUS: Strong stopping power and pain-point relevance.
-
-STRICT RULES:
-- Never invent specific numbers like "7,543 women" or "89% of users".
-- Use placeholders such as "thousands of customers", "growing community", or "[insert real data]".
-- Use statistics only when the user provided them.
-- Do not frame the product as a replacement for medical treatment.
-- Do not use niche-specific beauty framing when the product is not a beauty product.
-
-NICHE AWARENESS:
-- Read product_context carefully.
-- Adapt the concept to the actual product niche.
-- Infer the niche from product_context."""
-
-LUNA_SYSTEM = """You are Luna, a specialist in video ad concepts.
-
-INPUT: Hara insights validated by Rana.
-
-TASK: Create strong video ad concepts.
-
-JSON OUTPUT:
-{
-  "video_concepts": [
-    {
-      "nomor": 1,
-      "angle_konten": "...",
-      "hook_scene": {
-        "duration": "0-3 seconds",
-        "description": "What happens in the opening scene",
-        "dialogue_or_text": "...",
-        "visual": "real shoot / illustration / animation"
-      },
-      "body_scenes": [
-        {
-          "scene": "Scene 2",
-          "duration": "3-10 seconds",
-          "scene_text": "social proof / narration / product illustration",
-          "visual": "..."
-        }
-      ],
-      "production_requirements": {
-        "talent": "yes/no - description",
-        "location": "...",
-        "props": "...",
-        "estimated_total_duration": "..."
-      }
-    }
-  ]
-}
-
-PRODUCTION NOTES:
-- Do not use beauty-specific framing or visuals when the product is not a beauty product.
-
-NICHE AWARENESS:
-- Read product_context carefully.
-- Adapt the video concept to the actual product niche.
-- Infer the niche from product_context."""
-
-HAGEN_SYSTEM = """You are Hagen, the execution agent for video production.
-
-INPUT: Luna video concepts approved by Rana.
-
-TASK: Break the script down scene by scene for production.
-
-JSON OUTPUT:
-{
-  "script_breakdown": [
-    {
-      "scene_number": 1,
-      "duration": "...",
-      "visual_direction": "Camera, angle, and composition details",
-      "dialog": "Exact spoken script",
-      "on_screen_text": "Text overlay if any",
-      "audio": "music / sfx / voiceover",
-      "director_notes": "...",
-      "reusable": true/false
-    }
-  ],
-  "heygen_notes": "Suggested HeyGen avatar, voice settings, and notes",
-  "production_checklist": ["item1", "item2"]
-}"""
+def render_prompt(agent_name: str, replacements: Optional[dict[str, str]] = None) -> str:
+    prompt = load_prompt(agent_name)
+    for key, value in (replacements or {}).items():
+        prompt = prompt.replace(f"[[{key}]]", value)
+    return prompt
 
 HARA_JSON_SCHEMA = """
 {
@@ -964,7 +823,7 @@ def rana_init(state: AgentState) -> StateUpdate:
         f"- {item['insight']}" for item in rana_learning[-5:]
     ]) or "No previous learning is available."
 
-    system = RANA_SYSTEM.format(learning_context=learning)
+    system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     file_context = ""
     if state.get("uploaded_files"):
@@ -1026,7 +885,7 @@ REQUIRED:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, HARA_SYSTEM, prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("hara"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, HARA_JSON_SCHEMA, max_tokens=8000)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
@@ -1037,7 +896,7 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
     """Rana memvalidasi output Hara"""
     learning = "\n".join(
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
-    system = RANA_SYSTEM.format(learning_context=learning)
+    system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     prompt = f"""Output from Hara (Research Agent):
 {state['hara_output']}
@@ -1071,7 +930,7 @@ Create 10 powerful image ad concepts with strong stopping power."""
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, BOMBOM_SYSTEM, prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("bombom"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, BOMBOM_JSON_SCHEMA, max_tokens=8000)
     return {"bombom_output": cleaned_result,
@@ -1090,7 +949,7 @@ Create 3-5 video ad concepts with varied angles."""
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, LUNA_SYSTEM, prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("luna"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, LUNA_JSON_SCHEMA, max_tokens=8000)
     return {"luna_output": cleaned_result,
@@ -1101,7 +960,7 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
     """Rana membuat keputusan final"""
     learning = "\n".join(
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
-    system = RANA_SYSTEM.format(learning_context=learning)
+    system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     prompt = f"""Output from Bombom (Image Ads):
 {state.get('bombom_output', 'Tidak ada')}
@@ -1159,7 +1018,7 @@ Create a detailed production script breakdown."""
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, HAGEN_SYSTEM, prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("hagen"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, HAGEN_JSON_SCHEMA, max_tokens=8000)
     return {"hagen_output": cleaned_result, "current_step": "done",
