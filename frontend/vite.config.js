@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
     plugins: [react()],
-    base: '/rana-system/', // ganti dengan nama repo GitHub kamu
+    base: '/rana-system/', // Match the GitHub Pages repository path.
     build: {
         outDir: 'dist',
     },

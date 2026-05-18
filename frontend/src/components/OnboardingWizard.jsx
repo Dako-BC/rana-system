@@ -1,25 +1,25 @@
 import { useState } from 'react'
 
 const STEPS = [
-  { id: 'niche', label: 'Niche & Produk' },
+  { id: 'niche', label: 'Niche & Product' },
   { id: 'target', label: 'Target Market' },
-  { id: 'goals', label: 'Tujuan Iklan' },
-  { id: 'confirm', label: 'Konfirmasi' },
+  { id: 'goals', label: 'Ad Goals' },
+  { id: 'confirm', label: 'Confirm' },
 ]
 
 const NICHE_OPTIONS = [
-  { value: 'kecantikan', label: '💄 Kecantikan & Skincare' },
-  { value: 'kursus', label: '🎤 Kursus & Pelatihan' },
-  { value: 'kesehatan', label: '💪 Kesehatan & Wellness' },
+  { value: 'kecantikan', label: '💄 Beauty & Skincare' },
+  { value: 'kursus', label: '🎤 Courses & Training' },
+  { value: 'kesehatan', label: '💪 Health & Wellness' },
   { value: 'fashion', label: '👗 Fashion & Lifestyle' },
-  { value: 'bisnis', label: '📈 Bisnis & SaaS' },
-  { value: 'lainnya', label: '✦ Lainnya' },
+  { value: 'bisnis', label: '📈 Business & SaaS' },
+  { value: 'lainnya', label: '✦ Other' },
 ]
 
 const GOAL_OPTIONS = [
   { value: 'awareness', label: 'Brand Awareness' },
   { value: 'leads', label: 'Lead Generation' },
-  { value: 'konversi', label: 'Direct Konversi' },
+  { value: 'konversi', label: 'Direct Conversion' },
   { value: 'retargeting', label: 'Retargeting' },
 ]
 
@@ -173,15 +173,15 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
   const buildProductContext = () => {
     return [
       `NICHE: ${data.niche}`,
-      `PRODUK: ${data.productName}`,
-      `DESKRIPSI: ${data.productDesc}`,
+      `PRODUCT: ${data.productName}`,
+      `DESCRIPTION: ${data.productDesc}`,
       data.usp && `USP: ${data.usp}`,
-      `TARGET DEMOGRAFI: ${[data.targetAge, data.targetGender].filter(Boolean).join(', ')}`,
-      `MASALAH TARGET: ${data.targetProblem}`,
-      `TUJUAN IKLAN: ${data.goals.join(', ')}`,
-      `PLATFORM: ${data.platforms.join(', ')}`,
+      `TARGET DEMOGRAPHICS: ${[data.targetAge, data.targetGender].filter(Boolean).join(', ')}`,
+      `TARGET PROBLEM: ${data.targetProblem}`,
+      `AD GOALS: ${data.goals.join(', ')}`,
+      `PLATFORMS: ${data.platforms.join(', ')}`,
       data.budget && `BUDGET: ${data.budget}`,
-      data.additionalNotes && `CATATAN TAMBAHAN: ${data.additionalNotes}`,
+      data.additionalNotes && `ADDITIONAL NOTES: ${data.additionalNotes}`,
     ].filter(Boolean).join('\n')
   }
 
@@ -222,10 +222,10 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
             Rana Multi-Agent System
           </div>
           <h1 style={{ fontSize: '1.8rem', fontWeight: 600, color: 'var(--text)', margin: 0, lineHeight: 1.2 }}>
-            Setup Kampanye
+            Campaign Setup
           </h1>
           <p style={{ color: 'var(--text-dim)', marginTop: '0.5rem', fontSize: '0.9rem' }}>
-            Isi info produk kamu — agent kami akan mulai bekerja setelahnya.
+            Enter your product information — our agents will start working afterwards.
           </p>
         </div>
 
@@ -238,20 +238,20 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
           boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
         }}>
 
-          {/* Step 0 — Niche & Produk */}
+          {/* Step 0 - Niche and product */}
           {step === 0 && (
             <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Niche & Produk</h2>
-              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Pilih kategori dan jelaskan produkmu.</p>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Niche & Product</h2>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Choose a category and describe your product.</p>
 
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Kategori Produk</label>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Product Category</label>
               <div style={{ marginBottom: '1.5rem' }}>
                 <OptionGrid options={NICHE_OPTIONS} value={data.niche} onChange={set('niche')} />
               </div>
 
-              <TextField label="Nama Produk / Brand" placeholder="e.g. GlowUp Serum, SpeakPro Course" value={data.productName} onChange={set('productName')} />
-              <TextField label="Deskripsi Produk" placeholder="Jelaskan produk, manfaat utama, dan cara kerjanya..." value={data.productDesc} onChange={set('productDesc')} multiline />
-              <TextField label="USP (Opsional)" placeholder="Apa yang membuat produk ini beda dari kompetitor?" value={data.usp} onChange={set('usp')} hint="Unique Selling Proposition — satu kalimat yang paling membedakan." />
+              <TextField label="Product Name / Brand" placeholder="e.g. GlowUp Serum, SpeakPro Course" value={data.productName} onChange={set('productName')} />
+              <TextField label="Product Description" placeholder="Describe the product, main benefits, and how it works..." value={data.productDesc} onChange={set('productDesc')} multiline />
+              <TextField label="USP (Optional)" placeholder="What makes this product different from competitors?" value={data.usp} onChange={set('usp')} hint="Unique Selling Proposition — one sentence that sets it apart." />
             </div>
           )}
 
@@ -259,26 +259,26 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
           {step === 1 && (
             <div>
               <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Target Market</h2>
-              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Siapa yang paling butuh produk kamu?</p>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Who needs your product most?</p>
 
-              <TextField label="Rentang Usia Target" placeholder="e.g. 25–40 tahun, atau semua usia" value={data.targetAge} onChange={set('targetAge')} />
-              <TextField label="Gender Target (Opsional)" placeholder="e.g. Wanita, Pria, atau semua" value={data.targetGender} onChange={set('targetGender')} />
+              <TextField label="Target Age Range" placeholder="e.g. 25–40, or all ages" value={data.targetAge} onChange={set('targetAge')} />
+              <TextField label="Target Gender (Optional)" placeholder="e.g. Women, Men, or all" value={data.targetGender} onChange={set('targetGender')} />
               <TextField
-                label="Masalah Utama Target Market *"
-                placeholder="Apa masalah terbesar yang dihadapi target kamu? Semakin spesifik, semakin baik."
+                label="Main Target Market Problem *"
+                placeholder="What is the biggest problem your audience faces? The more specific, the better."
                 value={data.targetProblem} onChange={set('targetProblem')} multiline
-                hint="Contoh: Takut presentasi di depan atasan, tidak percaya diri bicara di publik, karir stagnan karena komunikasi yang buruk."
+                hint="Example: fear of presenting to managers, lack of confidence speaking publicly, stalled career due to poor communication."
               />
             </div>
           )}
 
-          {/* Step 2 — Tujuan */}
+          {/* Step 2 - Goals */}
           {step === 2 && (
             <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Tujuan & Platform</h2>
-              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Apa tujuan kampanye dan di mana iklan akan tayang?</p>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Goals & Platforms</h2>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>What is the campaign goal and where should ads run?</p>
 
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Tujuan Iklan *</label>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Ad Goals *</label>
               <div style={{ marginBottom: '1.5rem' }}>
                 <OptionGrid options={GOAL_OPTIONS} value={data.goals} onChange={set('goals')} multi />
               </div>
@@ -288,29 +288,29 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
                 <OptionGrid options={PLATFORM_OPTIONS} value={data.platforms} onChange={set('platforms')} multi />
               </div>
 
-              <TextField label="Budget Iklan (Opsional)" placeholder="e.g. Rp 5–10 juta/bulan" value={data.budget} onChange={set('budget')} />
-              <TextField label="Catatan Tambahan (Opsional)" placeholder="Info lain yang perlu diketahui agent — tone brand, referensi iklan, dll." value={data.additionalNotes} onChange={set('additionalNotes')} multiline />
+              <TextField label="Ad Budget (Optional)" placeholder="e.g. Rp 5–10 million/month" value={data.budget} onChange={set('budget')} />
+              <TextField label="Additional Notes (Optional)" placeholder="Other info the agent should know — brand tone, ad references, etc." value={data.additionalNotes} onChange={set('additionalNotes')} multiline />
             </div>
           )}
 
-          {/* Step 3 — Konfirmasi */}
+          {/* Step 3 - Confirmation */}
           {step === 3 && (
             <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Konfirmasi</h2>
-              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Cek kembali sebelum agent mulai bekerja.</p>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)', marginTop: 0, marginBottom: '0.3rem' }}>Confirm</h2>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>Review before agents start working.</p>
 
               <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '1.25rem', marginBottom: '1.5rem' }}>
                 <ConfirmRow label="Niche" value={data.niche} />
-                <ConfirmRow label="Produk" value={data.productName} />
-                <ConfirmRow label="Deskripsi" value={data.productDesc} />
+                <ConfirmRow label="Product" value={data.productName} />
+                <ConfirmRow label="Description" value={data.productDesc} />
                 <ConfirmRow label="USP" value={data.usp} />
-                <ConfirmRow label="Usia Target" value={data.targetAge} />
+                <ConfirmRow label="Target Age" value={data.targetAge} />
                 <ConfirmRow label="Gender" value={data.targetGender} />
-                <ConfirmRow label="Masalah Target" value={data.targetProblem} />
-                <ConfirmRow label="Tujuan" value={data.goals} />
+                <ConfirmRow label="Target Problem" value={data.targetProblem} />
+                <ConfirmRow label="Goals" value={data.goals} />
                 <ConfirmRow label="Platform" value={data.platforms} />
                 <ConfirmRow label="Budget" value={data.budget} />
-                <ConfirmRow label="Catatan" value={data.additionalNotes} />
+                <ConfirmRow label="Notes" value={data.additionalNotes} />
               </div>
 
               <div style={{
@@ -318,7 +318,7 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
                 background: 'var(--accent-faint)', border: '1px solid var(--accent)',
                 fontSize: '0.82rem', color: 'var(--accent-bright)', lineHeight: 1.5,
               }}>
-                ✦ Rana, Hara, Bombom, dan Luna akan mulai menganalisis produkmu secara paralel. Proses ini membutuhkan sekitar 30–60 detik.
+                ✦ Rana, Hara, Bombom, and Luna will start analyzing your product in parallel. This process takes about 30–60 seconds.
               </div>
             </div>
           )}
@@ -336,7 +336,7 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
                 opacity: step === 0 ? 0.4 : 1,
               }}
             >
-              ← Kembali
+              ← Back
             </button>
 
             {step < STEPS.length - 1 ? (
@@ -352,7 +352,7 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
                   cursor: canNext() ? 'pointer' : 'default', transition: 'all 0.15s',
                 }}
               >
-                Lanjut →
+                Continue →
               </button>
             ) : (
               <button
@@ -369,7 +369,7 @@ export default function OnboardingWizard({ onSubmit, loading = false }) {
                   boxShadow: loading ? 'none' : '0 0 20px var(--accent-glow)',
                 }}
               >
-                {loading ? '⏳ Memproses...' : '✦ Jalankan Agent'}
+                {loading ? '⏳ Processing...' : '✦ Run Agents'}
               </button>
             )}
           </div>

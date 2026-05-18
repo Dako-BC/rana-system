@@ -40,6 +40,7 @@ body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 #root {
@@ -117,6 +118,105 @@ body {
 
   100% {
     background-position: 0% 50%;
+  }
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: var(--bg);
+  overflow-x: hidden;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-page {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 32px;
+  align-items: start;
+  padding: 32px 24px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.app-left-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: sticky;
+  top: 90px;
+  align-self: flex-start;
+  min-width: 0;
+}
+
+.app-right-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 400px;
+  min-width: 0;
+}
+
+.two-col-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.rana-top-grid {
+  gap: 12px;
+}
+
+@media (max-width: 980px) {
+  .app-page {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    padding: 20px 16px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .app-left-panel {
+    position: static !important;
+    top: auto !important;
+    align-self: auto;
+  }
+
+  .app-right-panel {
+    min-height: auto;
+  }
+
+  .app-header {
+    padding: 12px 16px;
+    justify-content: space-between;
+  }
+
+  .app-header>div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-page {
+    padding: 16px 12px;
+    gap: 16px;
+  }
+
+  .two-col-grid,
+  .rana-top-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .app-right-panel {
+    min-height: auto;
   }
 }
 
