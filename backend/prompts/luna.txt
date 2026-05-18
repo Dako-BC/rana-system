@@ -37,6 +37,16 @@ JSON OUTPUT:
 PRODUCTION NOTES:
 - Do not use beauty-specific framing or visuals when the product is not a beauty product.
 
+LANGUAGE RULE:
+- The system instructions and UI defaults are in English.
+- Match the language of user-facing output values to the user's product context.
+- If the product context is mostly Indonesian, write user-facing output values in Indonesian.
+- If the product context is mostly English, write user-facing output values in English.
+- If the product context mixes Indonesian and English, use the dominant language.
+- If both languages are balanced, default user-facing output values to Indonesian.
+- Keep JSON field names exactly as requested by the schema.
+- Translate only the values/content, not the JSON keys.
+
 NICHE AWARENESS:
 - Read product_context carefully.
 - Adapt the video concept to the actual product niche.

@@ -758,10 +758,10 @@ def repair_truncated_json(text: str) -> str:
 
 
 def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 4000) -> str:
-    prompt = f"""Ubah output berikut menjadi JSON VALID sesuai schema.
+    prompt = f"""Convert the following output into VALID JSON that matches the schema.
 
 REQUIRED RULES:
-- Balas hanya JSON valid.
+- Return valid JSON only.
 - Do not use markdown, headings, bullets outside JSON, or code fences.
 - Do not remove important information from the raw output.
 - If the raw output contains clarification questions, put them in clarification_questions when supported.
@@ -827,7 +827,7 @@ def rana_init(state: AgentState) -> StateUpdate:
 
     file_context = ""
     if state.get("uploaded_files"):
-        file_context = f"\n\nKONTEN FILE YANG DIUPLOAD:\n{chr(10).join(state['uploaded_files'])}"
+        file_context = f"\n\nUPLOADED FILE CONTENT:\n{chr(10).join(state['uploaded_files'])}"
 
     session_context = ""
     prior_messages = state.get("messages", [])[-8:]
@@ -838,7 +838,7 @@ def rana_init(state: AgentState) -> StateUpdate:
             if content:
                 session_lines.append(str(content)[:1500])
         if session_lines:
-            session_context = f"\n\nKONTEKS SESSION SEBELUMNYA:\n{chr(10).join(session_lines)}"
+            session_context = f"\n\nPREVIOUS SESSION CONTEXT:\n{chr(10).join(session_lines)}"
 
     prompt = f"""Product context from the user:
 {state['product_context']}{file_context}{session_context}
@@ -848,9 +848,9 @@ Also decide whether any information is missing. Return JSON.
 
 Format:
 {{
-  "konteks_untuk_hara": "...",
-  "info_tambahan_dibutuhkan": "none / [specify]",
-  "catatan_rana": "..."
+  "context_for_hara": "...",
+  "additional_info_needed": "none / [specify]",
+  "rana_notes": "..."
 }}"""
 
     opts = state.get("opts") or {}
@@ -861,7 +861,7 @@ Format:
 
 
 def hara_research(state: AgentState) -> StateUpdate:
-    """Hara melakukan riset market"""
+    """Run Hara market research."""
     rana_msg = ""
     for msg in reversed(state.get("messages", [])):
         content = extract_message_content(msg)
@@ -877,7 +877,7 @@ Product: {state['product_context']}
 Do deep research and produce a comprehensive market analysis.
 
 REQUIRED:
-- Balas hanya JSON valid sesuai schema Hara.
+- Return valid JSON only according to the Hara schema.
 - Do not use markdown, headings, or code fences.
 - If data is missing, do not stop at clarification questions only.
 - Still provide best-effort analysis, put assumptions in `assumptions_used`, and put questions in `clarification_questions`."""
@@ -893,7 +893,7 @@ REQUIRED:
 
 
 def rana_validate_hara(state: AgentState) -> StateUpdate:
-    """Rana memvalidasi output Hara"""
+    """Validate Hara output."""
     learning = "\n".join(
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
@@ -919,7 +919,7 @@ Format JSON:
 
 
 def bombom_create_ads(state: AgentState) -> StateUpdate:
-    """Bombom membuat konsep image ads"""
+    """Create image ad concepts with Bombom."""
     prompt = f"""Hara insights validated by Rana:
 {state['hara_output']}
 
@@ -938,7 +938,7 @@ Create 10 powerful image ad concepts with strong stopping power."""
 
 
 def luna_create_video(state: AgentState) -> StateUpdate:
-    """Luna membuat konsep video"""
+    """Create video ad concepts with Luna."""
     prompt = f"""Hara insights validated by Rana:
 {state['hara_output']}
 
@@ -957,22 +957,22 @@ Create 3-5 video ad concepts with varied angles."""
 
 
 def rana_final_decision(state: AgentState) -> StateUpdate:
-    """Rana membuat keputusan final"""
+    """Create Rana final decision."""
     learning = "\n".join(
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     prompt = f"""Output from Bombom (Image Ads):
-{state.get('bombom_output', 'Tidak ada')}
+{state.get('bombom_output', 'None')}
 
 Output from Luna (Video Concept):
-{state.get('luna_output', 'Tidak ada')}
+{state.get('luna_output', 'None')}
 
 Give the final decision:
 1. Which image ad concepts are strongest (choose top 3)
 2. Which video concepts are strongest (choose top 2)
 3. What needs human review
-4. Rekomendasi next step
+4. Recommended next steps
 
 Format JSON:
 {{
