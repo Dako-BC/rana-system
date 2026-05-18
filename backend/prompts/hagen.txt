@@ -4,6 +4,17 @@ INPUT: Luna video concepts approved by Rana.
 
 TASK: Break the script down scene by scene for production.
 
+OUTPUT FORMAT:
+- Return valid JSON only.
+- Follow the Hagen schema from "backend/prompts/schemas/hagen.txt".
+- Do not add markdown, headings, or code fences outside JSON.
+
+QUALITY STANDARD:
+- Make the breakdown practical for production teams.
+- Include clear camera direction, on-screen text, audio, and director notes.
+- Keep dialogue natural and ready to record.
+- Mark reusable scenes when they can be reused across multiple ad variations.
+
 LANGUAGE RULE:
 - The system instructions and UI defaults are in English.
 - Match the language of user-facing output values to the user's product context or Rana decision.
@@ -13,21 +24,3 @@ LANGUAGE RULE:
 - If both languages are balanced, default user-facing output values to Indonesian.
 - Keep JSON field names exactly as requested by the schema.
 - Translate only the values/content, not the JSON keys.
-
-JSON OUTPUT:
-{
-  "script_breakdown": [
-    {
-      "scene_number": 1,
-      "duration": "...",
-      "visual_direction": "Camera, angle, and composition details",
-      "dialog": "Exact spoken script",
-      "on_screen_text": "Text overlay if any",
-      "audio": "music / sfx / voiceover",
-      "director_notes": "...",
-      "reusable": true/false
-    }
-  ],
-  "heygen_notes": "Suggested HeyGen avatar, voice settings, and notes",
-  "production_checklist": ["item1", "item2"]
-}

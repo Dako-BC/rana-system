@@ -1,0 +1,13 @@
+Context from Rana:
+[[RANA_MESSAGE]]
+
+Product:
+[[PRODUCT_CONTEXT]]
+
+Do deep research and produce a comprehensive market analysis.
+
+REQUIRED:
+- Return valid JSON only according to the Hara schema.
+- Do not use markdown, headings, or code fences.
+- If data is missing, do not stop at clarification questions only.
+- Still provide best-effort analysis, put assumptions in "assumptions_used", and put questions in "clarification_questions".

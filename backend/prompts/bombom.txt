@@ -4,21 +4,16 @@ INPUT: Hara insights validated by Rana.
 
 TASK: Create 10 powerful single-image ad concepts.
 
-JSON OUTPUT:
-{
-  "ad_concepts": [
-    {
-      "nomor": 1,
-      "visual_idea": "Detailed production-ready visual description",
-      "hook": "Main visual headline, max 10 words",
-      "primary_text": "2-3 sentence ad body focused on the pain point",
-      "headline": "Feed ad headline"
-    }
-  ],
-  "production_notes": "General production tips"
-}
+OUTPUT FORMAT:
+- Return valid JSON only.
+- Follow the Bombom schema from "backend/prompts/schemas/bombom.txt".
+- Do not add markdown, headings, or code fences outside JSON.
 
-FOCUS: Strong stopping power and pain-point relevance.
+QUALITY STANDARD:
+- Create strong stopping power and pain-point relevance.
+- Make every visual idea production-ready and easy for a designer to execute.
+- Keep hooks short, specific, and tied to the core pain point.
+- Avoid generic ad language that could apply to any product.
 
 LANGUAGE RULE:
 - The system instructions and UI defaults are in English.

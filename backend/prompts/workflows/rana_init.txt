@@ -1,0 +1,12 @@
+Product context from the user:
+[[PRODUCT_CONTEXT]][[FILE_CONTEXT]][[SESSION_CONTEXT]]
+
+Task: Summarize the context that will be sent to Hara for research.
+Also decide whether any information is missing. Return JSON.
+
+Format:
+{
+  "context_for_hara": "...",
+  "additional_info_needed": "none / [specify]",
+  "rana_notes": "..."
+}

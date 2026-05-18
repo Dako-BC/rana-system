@@ -1,0 +1,14 @@
+Convert the following output into VALID JSON that matches the schema.
+
+REQUIRED RULES:
+- Return valid JSON only.
+- Do not use markdown, headings, bullets outside JSON, or code fences.
+- Do not remove important information from the raw output.
+- If the raw output contains clarification questions, put them in clarification_questions when supported.
+- If data is missing, provide honest best-effort analysis and note assumptions in the closest field.
+
+SCHEMA:
+[[SCHEMA_HINT]]
+
+RAW OUTPUT:
+[[RAW_OUTPUT]]

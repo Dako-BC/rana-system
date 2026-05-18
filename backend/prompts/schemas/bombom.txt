@@ -1,0 +1,12 @@
+{
+  "ad_concepts": [
+    {
+      "number": 1,
+      "visual_idea": "...",
+      "hook": "...",
+      "primary_text": "...",
+      "headline": "..."
+    }
+  ],
+  "production_notes": "..."
+}

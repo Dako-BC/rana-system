@@ -1,0 +1,9 @@
+{
+  "top_image_ads": [1, 2, 3],
+  "top_video_concepts": [1, 2],
+  "choice_rationale": "...",
+  "needs_human_review": ["item1", "item2"],
+  "next_steps": ["step1", "step2"],
+  "run_hagen": false,
+  "user_summary": "..."
+}

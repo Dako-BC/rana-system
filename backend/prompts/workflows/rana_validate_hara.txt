@@ -1,0 +1,10 @@
+Output from Hara (Research Agent):
+[[HARA_OUTPUT]]
+
+Format JSON:
+{
+  "status": "approved" / "revision_needed",
+  "assessment": "...",
+  "what_needs_improvement": "none / [specify]",
+  "key_insight_for_creative_team": "Summary of the most important insight in 200 words"
+}

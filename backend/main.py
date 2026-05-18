@@ -268,6 +268,20 @@ PROMPT_FILES = {
     "bombom": "bombom.txt",
     "luna": "luna.txt",
     "hagen": "hagen.txt",
+    "schema_hara": "schemas/hara.txt",
+    "schema_bombom": "schemas/bombom.txt",
+    "schema_luna": "schemas/luna.txt",
+    "schema_rana_final": "schemas/rana_final.txt",
+    "schema_hagen": "schemas/hagen.txt",
+    "json_repair": "system/json_repair.txt",
+    "json_repair_system": "system/json_repair_system.txt",
+    "workflow_rana_init": "workflows/rana_init.txt",
+    "workflow_hara_research": "workflows/hara_research.txt",
+    "workflow_rana_validate_hara": "workflows/rana_validate_hara.txt",
+    "workflow_bombom_create_ads": "workflows/bombom_create_ads.txt",
+    "workflow_luna_create_video": "workflows/luna_create_video.txt",
+    "workflow_rana_final_decision": "workflows/rana_final_decision.txt",
+    "workflow_hagen_execute": "workflows/hagen_execute.txt",
 }
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
@@ -280,124 +294,25 @@ ALLOWED_UPLOAD_CONTENT_TYPES = {
 }
 
 
-def load_prompt(agent_name: str) -> str:
-    filename = PROMPT_FILES.get(agent_name)
+def load_prompt(prompt_name: str) -> str:
+    filename = PROMPT_FILES.get(prompt_name)
     if not filename:
-        raise RuntimeError(f"Unknown prompt agent: {agent_name}")
+        raise RuntimeError(f"Unknown prompt file: {prompt_name}")
 
     prompt_path = PROMPTS_DIR / filename
     try:
         return prompt_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:
         raise RuntimeError(
-            f"Prompt file not found for {agent_name}: {prompt_path}"
+            f"Prompt file not found for {prompt_name}: {prompt_path}"
         ) from exc
 
 
-def render_prompt(agent_name: str, replacements: Optional[dict[str, str]] = None) -> str:
-    prompt = load_prompt(agent_name)
+def render_prompt(prompt_name: str, replacements: Optional[dict[str, str]] = None) -> str:
+    prompt = load_prompt(prompt_name)
     for key, value in (replacements or {}).items():
         prompt = prompt.replace(f"[[{key}]]", value)
     return prompt
-
-HARA_JSON_SCHEMA = """
-{
-  "target_market": {
-    "demographics": "...",
-    "psychographics": "...",
-    "fb_interest_targeting": ["interest1", "interest2", "interest3"]
-  },
-  "core_problem": {
-    "main_pain_point": "...",
-    "problem_logic": "..."
-  },
-  "decision_trigger": {
-    "trigger": "...",
-    "penjelasan": "..."
-  },
-  "faq": [
-    {"question": "...", "answer": "..."}
-  ],
-  "objection": [
-    {"objection": "...", "handling": "..."}
-  ],
-  "ad_insight": "...",
-  "assumptions_used": ["..."],
-  "clarification_questions": ["..."]
-}
-"""
-
-BOMBOM_JSON_SCHEMA = """
-{
-  "ad_concepts": [
-    {
-      "nomor": 1,
-      "visual_idea": "...",
-      "hook": "...",
-      "primary_text": "...",
-      "headline": "..."
-    }
-  ],
-  "production_notes": "..."
-}
-"""
-
-LUNA_JSON_SCHEMA = """
-{
-  "video_concepts": [
-    {
-      "nomor": 1,
-      "angle_konten": "...",
-      "hook_scene": {
-        "duration": "0-3 seconds",
-        "description": "...",
-        "dialogue_or_text": "...",
-        "visual": "..."
-      },
-      "body_scenes": [
-        {"scene": "Scene 2", "duration": "3-10 seconds", "scene_text": "...", "visual": "..."}
-      ],
-      "production_requirements": {
-        "talent": "...",
-        "location": "...",
-        "props": "...",
-        "estimated_total_duration": "..."
-      }
-    }
-  ]
-}
-"""
-
-RANA_FINAL_JSON_SCHEMA = """
-{
-  "top_image_ads": [1, 2, 3],
-  "top_video_concepts": [1, 2],
-  "choice_rationale": "...",
-  "needs_human_review": ["item1", "item2"],
-  "next_steps": ["step1", "step2"],
-  "run_hagen": false,
-  "user_summary": "..."
-}
-"""
-
-HAGEN_JSON_SCHEMA = """
-{
-  "script_breakdown": [
-    {
-      "scene_number": 1,
-      "duration": "...",
-      "visual_direction": "...",
-      "dialog": "...",
-      "on_screen_text": "...",
-      "audio": "...",
-      "director_notes": "...",
-      "reusable": true
-    }
-  ],
-  "heygen_notes": "...",
-  "production_checklist": ["item1", "item2"]
-}
-"""
 
 
 # Claude helpers.
@@ -776,23 +691,12 @@ def repair_truncated_json(text: str) -> str:
 
 
 def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 4000) -> str:
-    prompt = f"""Convert the following output into VALID JSON that matches the schema.
-
-REQUIRED RULES:
-- Return valid JSON only.
-- Do not use markdown, headings, bullets outside JSON, or code fences.
-- Do not remove important information from the raw output.
-- If the raw output contains clarification questions, put them in clarification_questions when supported.
-- If data is missing, provide honest best-effort analysis and note assumptions in the closest field.
-
-SCHEMA:
-{schema_hint}
-
-RAW OUTPUT:
-{raw_text}
-"""
+    prompt = render_prompt("json_repair", {
+        "SCHEMA_HINT": schema_hint,
+        "RAW_OUTPUT": raw_text,
+    })
     converted = call_claude(
-        "You are a JSON repair and conversion engine. Return valid JSON only.",
+        load_prompt("json_repair_system"),
         prompt,
         DEFAULT_MODEL_BY_PROVIDER["anthropic"],
         max_tokens=max_tokens,
@@ -858,18 +762,11 @@ def rana_init(state: AgentState) -> StateUpdate:
         if session_lines:
             session_context = f"\n\nPREVIOUS SESSION CONTEXT:\n{chr(10).join(session_lines)}"
 
-    prompt = f"""Product context from the user:
-{state['product_context']}{file_context}{session_context}
-
-Task: Summarize the context that will be sent to Hara for research.
-Also decide whether any information is missing. Return JSON.
-
-Format:
-{{
-  "context_for_hara": "...",
-  "additional_info_needed": "none / [specify]",
-  "rana_notes": "..."
-}}"""
+    prompt = render_prompt("workflow_rana_init", {
+        "PRODUCT_CONTEXT": state["product_context"],
+        "FILE_CONTEXT": file_context,
+        "SESSION_CONTEXT": session_context,
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
@@ -887,25 +784,17 @@ def hara_research(state: AgentState) -> StateUpdate:
             rana_msg = content
             break
 
-    prompt = f"""Context from Rana:
-{rana_msg}
-
-Product: {state['product_context']}
-
-Do deep research and produce a comprehensive market analysis.
-
-REQUIRED:
-- Return valid JSON only according to the Hara schema.
-- Do not use markdown, headings, or code fences.
-- If data is missing, do not stop at clarification questions only.
-- Still provide best-effort analysis, put assumptions in `assumptions_used`, and put questions in `clarification_questions`."""
+    prompt = render_prompt("workflow_hara_research", {
+        "RANA_MESSAGE": str(rana_msg),
+        "PRODUCT_CONTEXT": state["product_context"],
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt("hara"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
-        result, HARA_JSON_SCHEMA, max_tokens=8000)
+        result, load_prompt("schema_hara"), max_tokens=8000)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
             "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
@@ -916,17 +805,9 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
-    prompt = f"""Output from Hara (Research Agent):
-{state['hara_output']}
-
-
-Format JSON:
-{{
-  "status": "approved" / "revision_needed",
-  "assessment": "...",
-  "what_needs_improvement": "none / [specify]",
-  "key_insight_for_creative_team": "Summary of the most important insight in 200 words"
-}}"""
+    prompt = render_prompt("workflow_rana_validate_hara", {
+        "HARA_OUTPUT": state["hara_output"] or "",
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
@@ -938,38 +819,34 @@ Format JSON:
 
 def bombom_create_ads(state: AgentState) -> StateUpdate:
     """Create image ad concepts with Bombom."""
-    prompt = f"""Hara insights validated by Rana:
-{state['hara_output']}
-
-Product: {state['product_context']}
-
-Create 10 powerful image ad concepts with strong stopping power."""
+    prompt = render_prompt("workflow_bombom_create_ads", {
+        "HARA_OUTPUT": state["hara_output"] or "",
+        "PRODUCT_CONTEXT": state["product_context"],
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt("bombom"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
-        result, BOMBOM_JSON_SCHEMA, max_tokens=8000)
+        result, load_prompt("schema_bombom"), max_tokens=8000)
     return {"bombom_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
 
 def luna_create_video(state: AgentState) -> StateUpdate:
     """Create video ad concepts with Luna."""
-    prompt = f"""Hara insights validated by Rana:
-{state['hara_output']}
-
-Product: {state['product_context']}
-
-Create 3-5 video ad concepts with varied angles."""
+    prompt = render_prompt("workflow_luna_create_video", {
+        "HARA_OUTPUT": state["hara_output"] or "",
+        "PRODUCT_CONTEXT": state["product_context"],
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt("luna"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
-        result, LUNA_JSON_SCHEMA, max_tokens=8000)
+        result, load_prompt("schema_luna"), max_tokens=8000)
     return {"luna_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
@@ -980,35 +857,17 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
         [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
-    prompt = f"""Output from Bombom (Image Ads):
-{state.get('bombom_output', 'None')}
-
-Output from Luna (Video Concept):
-{state.get('luna_output', 'None')}
-
-Give the final decision:
-1. Which image ad concepts are strongest (choose top 3)
-2. Which video concepts are strongest (choose top 2)
-3. What needs human review
-4. Recommended next steps
-
-Format JSON:
-{{
-  "top_image_ads": [1, 2, 3],
-  "top_video_concepts": [1, 2],
-  "choice_rationale": "...",
-  "needs_human_review": ["item1", "item2"],
-  "next_steps": ["step1", "step2"],
-  "run_hagen": true/false,
-  "user_summary": "Summary to show to the user"
-}}"""
+    prompt = render_prompt("workflow_rana_final_decision", {
+        "BOMBOM_OUTPUT": state.get("bombom_output") or "None",
+        "LUNA_OUTPUT": state.get("luna_output") or "None",
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, system, prompt, max_tokens=4000)
     cleaned_result = clean_agent_json_output(
-        result, RANA_FINAL_JSON_SCHEMA, max_tokens=4000)
+        result, load_prompt("schema_rana_final"), max_tokens=4000)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1025,20 +884,17 @@ Format JSON:
 
 def hagen_execute(state: AgentState) -> StateUpdate:
     """Create the optional Hagen execution script."""
-    prompt = f"""Best video concepts from Luna:
-{state.get('luna_output', '')}
-
-Rana decision:
-{state.get('rana_decision', '')}
-
-Create a detailed production script breakdown."""
+    prompt = render_prompt("workflow_hagen_execute", {
+        "LUNA_OUTPUT": state.get("luna_output") or "",
+        "RANA_DECISION": state.get("rana_decision") or "",
+    })
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt("hagen"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
-        result, HAGEN_JSON_SCHEMA, max_tokens=8000)
+        result, load_prompt("schema_hagen"), max_tokens=8000)
     return {"hagen_output": cleaned_result, "current_step": "done",
             "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
@@ -1215,7 +1071,7 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
 
 @app.post("/api/run")
 async def run_agents(request: RunRequest):
-    """Jalankan full multi-agent pipeline"""
+    """Run the full multi-agent pipeline."""
     validate_product_context(request.product_context)
     history = get_memory(request.session_id)
 

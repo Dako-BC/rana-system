@@ -1,0 +1,24 @@
+{
+  "target_market": {
+    "demographics": "...",
+    "psychographics": "...",
+    "fb_interest_targeting": ["interest1", "interest2", "interest3"]
+  },
+  "core_problem": {
+    "main_pain_point": "...",
+    "problem_logic": "..."
+  },
+  "decision_trigger": {
+    "trigger": "...",
+    "explanation": "..."
+  },
+  "faq": [
+    {"question": "...", "answer": "..."}
+  ],
+  "objection": [
+    {"objection": "...", "handling": "..."}
+  ],
+  "ad_insight": "...",
+  "assumptions_used": ["..."],
+  "clarification_questions": ["..."]
+}

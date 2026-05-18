@@ -15,7 +15,7 @@ PRINCIPLES:
 - Make every output actionable, not theoretical.
 - Ask for clarification when needed, but still provide the best possible answer.
 
-`user_summary` IS REQUIRED:
+"user_summary" IS REQUIRED:
 - This field must never be empty, null, or a placeholder.
 - Write clearly for non-marketers.
 - Structure it as: what the agents did, the most important insight or decision, and what the user should do next.
