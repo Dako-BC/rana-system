@@ -97,8 +97,8 @@ function getFriendlyErrorMessage(error) {
   if (/network|fetch|failed to fetch/.test(normalized)) {
     return 'Unable to connect to the system. Make sure your internet connection is stable, then try again.'
   }
-  if (/502|ai service|anthropic|bad gateway/.test(normalized)) {
-    return 'Backend is running, but the AI service request failed. Check the backend terminal for the Anthropic error detail, API key, quota, or rate limit.'
+  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok|nvidia/.test(normalized)) {
+    return 'The AI service request failed. Check the backend terminal for error details, API key configuration, quota, or rate limit.'
   }
   if (/api/.test(normalized)) {
     return 'There is a configuration issue. Contact the technical team.'
@@ -178,6 +178,8 @@ const PROVIDER_LABELS = {
   grok: 'Grok',
   openai: 'OpenAI',
   gemini: 'Gemini',
+  openrouter: 'OpenRouter',
+  nvidia: 'NVIDIA',
 }
 
 const PROVIDER_MODELS = {
@@ -196,8 +198,17 @@ const PROVIDER_MODELS = {
     'gpt-4o',
   ],
   gemini: [
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash',
+  ],
+  openrouter: [
+    'deepseek/deepseek-chat-v3-0324',
+    'qwen/qwen3-32b',
+    'mistralai/mistral-small-3.1-24b-instruct',
+    'openai/gpt-4o-mini',
+  ],
+  nvidia: [
+    'meta/llama-3.1-8b-instruct',
   ],
 }
 

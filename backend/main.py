@@ -7,6 +7,7 @@ Deploy: Railway or Render.
 import os
 import re
 import json
+import time
 import asyncio
 import logging
 from pathlib import Path
@@ -50,14 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    raise RuntimeError(
-        "ANTHROPIC_API_KEY was not found. Add it to backend/.env or set it before starting the backend."
-    )
-client = anthropic.Anthropic(api_key=api_key)
+# Anthropic client is optional; backend can run with other providers (e.g., NVIDIA)
+anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+client = anthropic.Anthropic(api_key=anthropic_api_key) if anthropic_api_key else None
 
 # Model configuration.
+# NVIDIA NIM API defaults (can be overridden via environment variables)
+NVIDIA_DEFAULT_MODEL = os.environ.get("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+NVIDIA_BASE_URL = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
 PROVIDER_MODELS = {
     "anthropic": [
         "claude-3-5-haiku-20241022",
@@ -74,9 +76,18 @@ PROVIDER_MODELS = {
         "gpt-4o",
     ],
     "gemini": [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
     ],
+    "nvidia": [
+        NVIDIA_DEFAULT_MODEL
+    ],
+    "openrouter": [
+    "deepseek/deepseek-chat-v3-0324",
+    "qwen/qwen3-32b",
+    "mistralai/mistral-small-3.1-24b-instruct",
+    "openai/gpt-4o-mini",
+],
 }
 
 DEFAULT_MODEL_BY_PROVIDER = {
@@ -88,6 +99,8 @@ API_KEYS = {
     "grok": os.environ.get("XAI_API_KEY"),
     "openai": os.environ.get("OPENAI_API_KEY"),
     "gemini": os.environ.get("GOOGLE_GEMINI_API_KEY"),
+    "nvidia": os.environ.get("NVIDIA_API_KEY"),
+    "openrouter": os.environ.get("OPENROUTER_API_KEY"),
 }
 
 
@@ -103,112 +116,46 @@ def get_model(model: str, provider: str) -> str:
 async def check_anthropic_availability(model: str):
     if not API_KEYS["anthropic"]:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": API_KEYS["anthropic"],
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "test"}],
-                },
-                timeout=10.0,
-            )
-        if response.status_code == 200:
-            return {"available": True, "quota": "Unknown"}
-        elif response.status_code == 401:
-            return {"available": False, "reason": "Invalid API key"}
-        elif response.status_code == 429:
-            return {"available": False, "reason": "Rate limit exceeded"}
-        else:
-            return {"available": False, "reason": f"API error: {response.status_code}"}
-    except Exception as e:
-        return {"available": False, "reason": f"Network error: {str(e)}"}
+    return {"available": True, "quota": "API key set"}
 
 
 async def check_openai_availability(model: str):
     if not API_KEYS["openai"]:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {API_KEYS['openai']}"},
-                timeout=10.0,
-            )
-        data = response.json()
-        available_models = [m["id"] for m in data.get("data", [])]
-        if model in available_models:
-            return {"available": True, "quota": "Check dashboard"}
-        else:
-            return {"available": False, "reason": "Model not available"}
-    except Exception as e:
-        return {"available": False, "reason": f"Error: {str(e)}"}
+    return {"available": True, "quota": "API key set"}
 
 
 async def check_grok_availability(model: str):
     if not API_KEYS["grok"]:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.x.ai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {API_KEYS['grok']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 10,
-                    "messages": [{"role": "user", "content": "test"}],
-                },
-                timeout=10.0,
-            )
-        if response.status_code == 200:
-            return {"available": True, "quota": "Check Grok dashboard"}
-        elif response.status_code == 401 or response.status_code == 403:
-            return {"available": False, "reason": "Invalid API key"}
-        elif response.status_code == 429:
-            return {"available": False, "reason": "Rate limit exceeded"}
-        else:
-            return {"available": False, "reason": f"API error: {response.status_code}"}
-    except Exception as e:
-        return {"available": False, "reason": f"Error: {str(e)}"}
+    return {"available": True, "quota": "API key set"}
 
 
 async def check_gemini_availability(model: str):
     if not API_KEYS["gemini"]:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEYS['gemini']}",
-                json={
-                    "contents": [{"parts": [{"text": "test"}]}],
-                },
-                timeout=10.0,
-            )
-        if response.status_code == 200:
-            return {"available": True, "quota": "Check Google AI dashboard"}
-        elif response.status_code == 401 or response.status_code == 403:
-            return {"available": False, "reason": "Invalid API key"}
-        elif response.status_code == 404:
-            return {"available": False, "reason": "Model not found - check model name"}
-        else:
-            return {"available": False, "reason": f"API error: {response.status_code}"}
-    except Exception as e:
-        return {"available": False, "reason": f"Error: {str(e)}"}
+    return {"available": True, "quota": "API key set"}
+
+
+async def check_nvidia_availability(model: str):
+    if not API_KEYS["nvidia"]:
+        return {"available": False, "reason": "API key not set"}
+    return {"available": True, "quota": "API key set"}
+
+
+async def check_openrouter_availability(model: str):
+    if not API_KEYS["openrouter"]:
+        return {"available": False, "reason": "API key not set"}
+    return {"available": True, "quota": "API key set"}
+
 
 AVAILABILITY_CHECKERS = {
     "anthropic": check_anthropic_availability,
     "grok": check_grok_availability,
     "openai": check_openai_availability,
     "gemini": check_gemini_availability,
+    "nvidia": check_nvidia_availability,
+    "openrouter": check_openrouter_availability,
 }
 
 
@@ -238,7 +185,7 @@ def get_memory(session_id: str) -> list:
 
 
 def save_memory(session_id: str, messages: list):
-    session_memory[session_id] = messages[-20:]  # Keep the latest 20 messages.
+    session_memory[session_id] = messages[-6:]  # Keep the latest 20 messages.
 
 
 # Agent state.
@@ -431,6 +378,11 @@ def call_claude(
     max_tokens: int = 2000,
     max_continuations: int = 2,
 ) -> str:
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY not set. Anthropic requests cannot be processed."
+        )
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
     ]
@@ -529,48 +481,76 @@ def call_openai(
             detail="OPENAI_API_KEY not set. OpenAI requests cannot be processed."
         )
 
-    try:
-        response = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {API_KEYS['openai']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "max_tokens": max_tokens,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_message},
-                ],
-            },
-            timeout=30.0,
-        )
-
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"OpenAI API error: {response.status_code}. "
-                    f"Response: {response.text}"
-                ),
+    max_retries = 3
+    retry_delay = 1  # Start with 1 second
+    
+    for attempt in range(max_retries):
+        try:
+            response = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEYS['openai']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user_message},
+                    ],
+                },
+                timeout=30.0,
             )
 
-        data = response.json()
-        choices = data.get("choices", [])
-        if not choices:
+            # Handle rate limiting with exponential backoff
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"OpenAI rate limit hit (429). Retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="OpenAI API rate limit exceeded. Please try again later."
+                    )
+            
+            # Handle authentication errors
+            if response.status_code == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail="OpenAI API authentication failed. Check your API key."
+                )
+            
+            # Handle other errors
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"OpenAI API error: {response.status_code}. "
+                        f"Response: {response.text}"
+                    ),
+                )
+
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise HTTPException(
+                    status_code=502,
+                    detail="OpenAI API returned no choices. Check the API response."
+                )
+            return choices[0].get("message", {}).get("content", "")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
             raise HTTPException(
                 status_code=502,
-                detail="OpenAI API returned no choices. Check the API response."
+                detail=f"OpenAI API connection error: {str(e)}"
             )
-        return choices[0].get("message", {}).get("content", "")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"OpenAI API connection error: {str(e)}"
-        )
 
 
 def call_grok(
@@ -629,6 +609,132 @@ def call_grok(
         )
 
 
+def call_nvidia(
+    system: str,
+    user_message: str,
+    model: str,
+    max_tokens: int = 2000,
+) -> str:
+    """Call NVIDIA NIM API (OpenAI-compatible endpoint)."""
+    if not API_KEYS["nvidia"]:
+        raise HTTPException(
+            status_code=503,
+            detail="NVIDIA_API_KEY not set. NVIDIA requests cannot be processed."
+        )
+
+    try:
+        response = httpx.post(
+            f"{NVIDIA_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEYS['nvidia']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+            },
+            timeout=30.0,
+        )
+
+        if response.status_code == 401:
+            raise HTTPException(
+                status_code=401,
+                detail="NVIDIA API authentication failed. Check your NVIDIA_API_KEY."
+            )
+
+        if response.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="NVIDIA API rate limit exceeded. Please try again later."
+            )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"NVIDIA API error: {response.status_code}. "
+                    f"Response: {response.text}"
+                ),
+            )
+
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise HTTPException(
+                status_code=502,
+                detail="NVIDIA API returned no choices. Check the API response."
+            )
+        return choices[0].get("message", {}).get("content", "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"NVIDIA API connection error: {str(e)}"
+        )
+def call_openrouter(
+    system: str,
+    user_message: str,
+    model: str,
+    max_tokens: int = 1200,
+) -> str:
+    if not API_KEYS["openrouter"]:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENROUTER_API_KEY not set. OpenRouter requests cannot be processed."
+        )
+
+    try:
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEYS['openrouter']}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:5173",
+                "X-OpenRouter-Title": "Rana Agent",
+            },
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+            },
+            timeout=30.0,
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenRouter API error: {response.status_code}. Response: {response.text}",
+            )
+
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise HTTPException(
+                status_code=502,
+                detail="OpenRouter API returned no choices."
+            )
+
+        return choices[0].get("message", {}).get("content", "")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenRouter API connection error: {str(e)}"
+        )
+
+
+
+
 def call_model(
     provider: str,
     model_name: str,
@@ -637,6 +743,7 @@ def call_model(
     max_tokens: int = 2000,
 ) -> str:
     model = get_model(model_name, provider)
+    logger.info(f"Using provider={provider}, model={model_name}")
     if provider == "anthropic":
         return call_claude(system, user_message, model, max_tokens=max_tokens)
     if provider == "gemini":
@@ -645,15 +752,24 @@ def call_model(
         return call_openai(system, user_message, model, max_tokens=max_tokens)
     if provider == "grok":
         return call_grok(system, user_message, model, max_tokens=max_tokens)
+    if provider == "nvidia":
+        return call_nvidia(system, user_message, model, max_tokens=max_tokens)
+    if provider == "openrouter":
+        return call_openrouter(system, user_message, model, max_tokens=max_tokens)
 
     raise HTTPException(
         status_code=400,
-        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok."
+        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok, nvidia, openrouter."
     )
 
 
 def call_claude_stream(system: str, user_message: str, max_tokens: int = 2000):
     """Stream a Claude response."""
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY not set. Anthropic streaming requests cannot be processed."
+        )
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
     ]
@@ -835,6 +951,49 @@ def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, ma
     )
 
 
+def build_creative_brief(hara_output: str) -> str:
+    if not isinstance(hara_output, str) or not hara_output.strip():
+        return ""
+
+    cleaned = repair_truncated_json(strip_json_fence(hara_output)).strip()
+    if not cleaned:
+        return ""
+
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:
+        return cleaned[:2500].strip()
+
+    if not isinstance(parsed, dict):
+        return cleaned[:2500].strip()
+
+    sections = []
+    keys = [
+        ("target_market", "Target Market"),
+        ("core_problem", "Core Problem"),
+        ("decision_trigger", "Decision Trigger"),
+        ("objection", "Objection"),
+        ("ad_insight", "Ad Insight"),
+        ("assumptions_used", "Assumptions Used"),
+    ]
+
+    for key, label in keys:
+        if key not in parsed or parsed[key] in (None, "", [], {}):
+            continue
+        value = parsed[key]
+        if isinstance(value, (dict, list)):
+            value_text = json.dumps(value, ensure_ascii=False, indent=2)
+        else:
+            value_text = str(value)
+        sections.append(f"{label}:\n{value_text}")
+
+    if not sections:
+        return cleaned[:2500].strip()
+
+    creative_brief = "\n\n".join(sections).strip()
+    return creative_brief[:2500]
+
+
 def rana_init(state: AgentState) -> StateUpdate:
     """Prepare context for Hara."""
     learning = "\n".join([
@@ -848,13 +1007,13 @@ def rana_init(state: AgentState) -> StateUpdate:
         file_context = f"\n\nUPLOADED FILE CONTENT:\n{chr(10).join(state['uploaded_files'])}"
 
     session_context = ""
-    prior_messages = state.get("messages", [])[-8:]
+    prior_messages = state.get("messages", [])[-2:]
     if prior_messages:
         session_lines = []
         for msg in prior_messages:
             content = extract_message_content(msg)
             if content:
-                session_lines.append(str(content)[:1500])
+                session_lines.append(str(content)[:400])
         if session_lines:
             session_context = f"\n\nPREVIOUS SESSION CONTEXT:\n{chr(10).join(session_lines)}"
 
@@ -903,9 +1062,9 @@ REQUIRED:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("hara"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("hara"), prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, HARA_JSON_SCHEMA, max_tokens=8000)
+        result, HARA_JSON_SCHEMA, max_tokens=1000)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
             "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
@@ -938,38 +1097,46 @@ Format JSON:
 
 def bombom_create_ads(state: AgentState) -> StateUpdate:
     """Create image ad concepts with Bombom."""
-    prompt = f"""Hara insights validated by Rana:
-{state['hara_output']}
+    creative_brief = build_creative_brief(state.get("hara_output") or "")
+    if not creative_brief:
+        creative_brief = "Hara output unavailable. Use the product context and the validated Rana direction to generate creative concepts."
+
+    prompt = f"""Creative brief from Hara:
+{creative_brief}
 
 Product: {state['product_context']}
 
-Create 10 powerful image ad concepts with strong stopping power."""
+Create 3 powerful image ad concepts with strong stopping power."""
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("bombom"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("bombom"), prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, BOMBOM_JSON_SCHEMA, max_tokens=8000)
+        result, BOMBOM_JSON_SCHEMA, max_tokens=1000)
     return {"bombom_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
 
 def luna_create_video(state: AgentState) -> StateUpdate:
     """Create video ad concepts with Luna."""
-    prompt = f"""Hara insights validated by Rana:
-{state['hara_output']}
+    creative_brief = build_creative_brief(state.get("hara_output") or "")
+    if not creative_brief:
+        creative_brief = "Hara output unavailable. Use the product context and the validated Rana direction to generate creative concepts."
+
+    prompt = f"""Creative brief from Hara:
+{creative_brief}
 
 Product: {state['product_context']}
 
-Create 3-5 video ad concepts with varied angles."""
+Create 2 video ad concepts with varied angles."""
 
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("luna"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("luna"), prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, LUNA_JSON_SCHEMA, max_tokens=8000)
+        result, LUNA_JSON_SCHEMA, max_tokens=1000)
     return {"luna_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
@@ -1006,9 +1173,9 @@ Format JSON:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=4000)
+    result = call_model(provider, model_name, system, prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, RANA_FINAL_JSON_SCHEMA, max_tokens=4000)
+        result, RANA_FINAL_JSON_SCHEMA, max_tokens=1000)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1036,9 +1203,9 @@ Create a detailed production script breakdown."""
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("hagen"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt("hagen"), prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, HAGEN_JSON_SCHEMA, max_tokens=8000)
+        result, HAGEN_JSON_SCHEMA, max_tokens=1000)
     return {"hagen_output": cleaned_result, "current_step": "done",
             "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
