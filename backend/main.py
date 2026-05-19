@@ -77,6 +77,12 @@ PROVIDER_MODELS = {
         "gemini-1.5-flash",
         "gemini-1.5-pro",
     ],
+    "openrouter": [
+        "deepseek/deepseek-chat-v3-0324",
+        "qwen/qwen3-32b",
+        "mistralai/mistral-small-3.1-24b-instruct",
+        "openai/gpt-4o-mini",
+    ],
 }
 
 DEFAULT_MODEL_BY_PROVIDER = {
@@ -88,6 +94,7 @@ API_KEYS = {
     "grok": os.environ.get("XAI_API_KEY"),
     "openai": os.environ.get("OPENAI_API_KEY"),
     "gemini": os.environ.get("GOOGLE_GEMINI_API_KEY"),
+    "openrouter": os.environ.get("OPENROUTER_API_KEY"),
 }
 
 
@@ -204,11 +211,40 @@ async def check_gemini_availability(model: str):
     except Exception as e:
         return {"available": False, "reason": f"Error: {str(e)}"}
 
+
+async def check_openrouter_availability(model: str):
+    if not API_KEYS["openrouter"]:
+        return {"available": False, "reason": "API key not set"}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {API_KEYS['openrouter']}"},
+                timeout=10.0,
+            )
+        if response.status_code != 200:
+            return {"available": False, "reason": f"API error: {response.status_code}"}
+
+        data = response.json()
+        available_models = []
+        for item in data.get("data", []) or data.get("models", []):
+            if isinstance(item, dict):
+                available_models.append(item.get("id") or item.get("name"))
+            else:
+                available_models.append(str(item))
+
+        if model in available_models:
+            return {"available": True, "quota": "Check OpenRouter dashboard"}
+        return {"available": False, "reason": "Model not available"}
+    except Exception as e:
+        return {"available": False, "reason": f"Error: {str(e)}"}
+
 AVAILABILITY_CHECKERS = {
     "anthropic": check_anthropic_availability,
     "grok": check_grok_availability,
     "openai": check_openai_availability,
     "gemini": check_gemini_availability,
+    "openrouter": check_openrouter_availability,
 }
 
 
@@ -284,7 +320,8 @@ PROMPT_FILES = {
     "workflow_hagen_execute": "workflows/hagen_execute.txt",
 }
 
-MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.environ.get(
+    "MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 ALLOWED_UPLOAD_EXTENSIONS = {".txt", ".md", ".csv"}
 ALLOWED_UPLOAD_CONTENT_TYPES = {
     "text/plain",
@@ -432,6 +469,54 @@ def call_gemini(
     return "".join(part.get("text", "") for part in parts)
 
 
+def call_openrouter(
+    system: str,
+    user_message: str,
+    model: str,
+    max_tokens: int = 2000,
+) -> str:
+    if not API_KEYS["openrouter"]:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENROUTER_API_KEY not set. OpenRouter requests cannot be processed."
+        )
+
+    response = httpx.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {API_KEYS['openrouter']}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message},
+            ],
+        },
+        timeout=30.0,
+    )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"OpenRouter API error: {response.status_code}. "
+                f"Response: {response.text}"
+            ),
+        )
+
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenRouter API returned no choices. Check the API response."
+        )
+    return choices[0].get("message", {}).get("content", "")
+
+
 def call_openai(
     system: str,
     user_message: str,
@@ -560,10 +645,12 @@ def call_model(
         return call_openai(system, user_message, model, max_tokens=max_tokens)
     if provider == "grok":
         return call_grok(system, user_message, model, max_tokens=max_tokens)
+    if provider == "openrouter":
+        return call_openrouter(system, user_message, model, max_tokens=max_tokens)
 
     raise HTTPException(
         status_code=400,
-        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok."
+        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok, openrouter."
     )
 
 
@@ -792,7 +879,8 @@ def hara_research(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("hara"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt(
+        "hara"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, load_prompt("schema_hara"), max_tokens=8000)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
@@ -827,7 +915,8 @@ def bombom_create_ads(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("bombom"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt(
+        "bombom"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, load_prompt("schema_bombom"), max_tokens=8000)
     return {"bombom_output": cleaned_result,
@@ -844,7 +933,8 @@ def luna_create_video(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("luna"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt(
+        "luna"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, load_prompt("schema_luna"), max_tokens=8000)
     return {"luna_output": cleaned_result,
@@ -892,7 +982,8 @@ def hagen_execute(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, render_prompt("hagen"), prompt, max_tokens=8000)
+    result = call_model(provider, model_name, render_prompt(
+        "hagen"), prompt, max_tokens=8000)
     cleaned_result = clean_agent_json_output(
         result, load_prompt("schema_hagen"), max_tokens=8000)
     return {"hagen_output": cleaned_result, "current_step": "done",
@@ -1014,7 +1105,8 @@ def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
                 f"Supported providers: {', '.join(sorted(supported_providers))}."
             ),
         )
-    model_name = (opts or {}).get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
+    model_name = (opts or {}).get(
+        "model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     if model_name not in PROVIDER_MODELS[provider]:
         raise HTTPException(
             status_code=400,
