@@ -29,12 +29,13 @@ async function parseApiError(res) {
   return new Error(`${friendly}${suffix}`)
 }
 
-export async function runAgents({ sessionId, productContext, runHagen = false, opts = {} }) {
+export async function runAgents({ sessionId, userId, productContext, runHagen = false, opts = {} }) {
   const res = await fetch(apiUrl('/api/run'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       session_id: sessionId,
+      user_id: userId,
       product_context: productContext,
       run_hagen: runHagen,
       opts,
@@ -44,12 +45,13 @@ export async function runAgents({ sessionId, productContext, runHagen = false, o
   return res.json()
 }
 
-export async function continueSession({ sessionId, productContext, additionalInput, runHagen = false, opts = {} }) {
+export async function continueSession({ sessionId, userId, productContext, additionalInput, runHagen = false, opts = {} }) {
   const res = await fetch(apiUrl('/api/continue'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       session_id: sessionId,
+      user_id: userId,
       product_context: productContext,
       additional_input: additionalInput,
       run_hagen: runHagen,
@@ -60,9 +62,10 @@ export async function continueSession({ sessionId, productContext, additionalInp
   return res.json()
 }
 
-export async function uploadFile(sessionId, file) {
+export async function uploadFile(sessionId, file, userId) {
   const form = new FormData()
   form.append('session_id', sessionId)
+  if (userId) form.append('user_id', userId)
   form.append('file', file)
   const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
@@ -72,18 +75,19 @@ export async function uploadFile(sessionId, file) {
   return res.json()
 }
 
-export async function saveFeedback(sessionId, feedback) {
+export async function saveFeedback(sessionId, feedback, userId) {
   const res = await fetch(apiUrl('/api/feedback'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, feedback }),
+    body: JSON.stringify({ session_id: sessionId, user_id: userId, feedback }),
   })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }
 
-export async function clearMemory(sessionId) {
-  const res = await fetch(apiUrl(`/api/memory/${sessionId}`), { method: 'DELETE' })
+export async function clearMemory(sessionId, userId) {
+  const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
+  const res = await fetch(apiUrl(`/api/memory/${sessionId}${query}`), { method: 'DELETE' })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }

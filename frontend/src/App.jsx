@@ -4,10 +4,67 @@ import { runAgents, continueSession, uploadFile, saveFeedback, clearMemory, getM
 
 // Helpers.
 const SESSION_KEY = 'rana_session_id'
+const USER_KEY = 'rana_guest_user_id'
+const SESSION_LIST_PREFIX = 'rana_session_list:'
 const SESSION_STATE_PREFIX = 'rana_session_state:'
-const getSessionId = () => {
-  let id = localStorage.getItem(SESSION_KEY)
-  if (!id) { id = uuidv4(); localStorage.setItem(SESSION_KEY, id) }
+const MAX_SESSIONS = 3
+const MAX_SESSION_CHARS = 18000
+const SESSION_WARNING_CHARS = 13000
+const defaultWizardForm = {
+  namaProduk: '',
+  kategori: '',
+  keunggulan: '',
+  targetAudience: '',
+  painPoint: '',
+  harga: '',
+  platform: [],
+  kompetitor: '',
+  catatan: ''
+}
+
+const getUserId = () => {
+  let id = localStorage.getItem(USER_KEY)
+  if (!id) {
+    id = `guest_${uuidv4()}`
+    localStorage.setItem(USER_KEY, id)
+  }
+  return id
+}
+
+const getSessionListKey = (userId) => `${SESSION_LIST_PREFIX}${userId || 'guest'}`
+
+function readSessionList(userId) {
+  try {
+    const raw = localStorage.getItem(getSessionListKey(userId))
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeSessionList(userId, sessions) {
+  try {
+    localStorage.setItem(getSessionListKey(userId), JSON.stringify(sessions.slice(0, MAX_SESSIONS)))
+  } catch { }
+}
+
+const getSessionId = (userId) => {
+  const existing = localStorage.getItem(SESSION_KEY)
+  const sessions = readSessionList(userId)
+  if (existing && sessions.some(session => session.id === existing)) return existing
+
+  const id = sessions[0]?.id || uuidv4()
+  localStorage.setItem(SESSION_KEY, id)
+  if (!sessions.length) {
+    writeSessionList(userId, [{
+      id,
+      title: 'New conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasResult: false,
+    }])
+  }
   return id
 }
 
@@ -34,6 +91,61 @@ function clearSessionState(sessionId) {
   try {
     localStorage.removeItem(getSessionStateKey(sessionId))
   } catch { }
+}
+
+function getEmptySessionState() {
+  return {
+    productContext: '',
+    wizardStep: 1,
+    wizardForm: defaultWizardForm,
+    uploadedFiles: [],
+    runHagen: false,
+    provider: DEFAULT_PROVIDER,
+    model: getDefaultModel(DEFAULT_PROVIDER),
+    result: null,
+    additionalInput: '',
+  }
+}
+
+function getSessionTitle(state) {
+  const productName = state?.wizardForm?.namaProduk?.trim()
+  if (productName) return productName.slice(0, 48)
+  const firstContextLine = String(state?.productContext || '').split('\n').find(Boolean)
+  if (firstContextLine) return firstContextLine.replace(/^Product name:\s*/i, '').slice(0, 48)
+  return 'New conversation'
+}
+
+function getSessionUsage(state) {
+  const payload = [
+    state?.productContext,
+    state?.additionalInput,
+    state?.result?.hara_output,
+    state?.result?.bombom_output,
+    state?.result?.luna_output,
+    state?.result?.hagen_output,
+    state?.result?.rana_decision,
+  ].filter(Boolean).join('\n')
+  return payload.length
+}
+
+function isSessionUnusedState(state) {
+  if (!state) return true
+  if (state.result) return false
+  if ((state.uploadedFiles || []).length > 0) return false
+  if (getMeaningfulLength(state.additionalInput) > 0) return false
+  const form = state.wizardForm || {}
+  const formText = [
+    form.namaProduk,
+    form.kategori,
+    form.keunggulan,
+    form.targetAudience,
+    form.painPoint,
+    form.harga,
+    form.kompetitor,
+    form.catatan,
+    ...(form.platform || []),
+  ].join(' ')
+  return getMeaningfulLength(formText) === 0
 }
 
 function tryParseJson(str) {
@@ -97,7 +209,7 @@ function getFriendlyErrorMessage(error) {
   if (/network|fetch|failed to fetch/.test(normalized)) {
     return 'Unable to connect to the system. Make sure your internet connection is stable, then try again.'
   }
-  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok|nvidia/.test(normalized)) {
+  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok/.test(normalized)) {
     return 'The AI service request failed. Check the backend terminal for error details, API key configuration, quota, or rate limit.'
   }
   if (/api/.test(normalized)) {
@@ -179,7 +291,6 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI',
   gemini: 'Gemini',
   openrouter: 'OpenRouter',
-  nvidia: 'NVIDIA',
 }
 
 const PROVIDER_MODELS = {
@@ -1108,13 +1219,13 @@ function RanaDecisionCard({ content }) {
   )
 }
 
-function FeedbackBar({ sessionId, onDone }) {
+function FeedbackBar({ sessionId, userId, onDone }) {
   const [feedback, setFeedback] = useState('')
   const [sent, setSent] = useState(false)
 
   const send = async () => {
     if (!feedback.trim()) return
-    await saveFeedback(sessionId, feedback)
+    await saveFeedback(sessionId, feedback, userId)
     setSent(true)
     onDone?.()
   }
@@ -1161,20 +1272,13 @@ function FeedbackBar({ sessionId, onDone }) {
 
 // Main app.
 export default function App() {
-  const sessionId = useRef(getSessionId()).current
+  const userId = useRef(getUserId()).current
+  const [sessionList, setSessionList] = useState(() => readSessionList(userId))
+  const [sessionId, setSessionId] = useState(() => getSessionId(userId))
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
+  const [showNewChatWarning, setShowNewChatWarning] = useState(false)
   const savedState = useRef(readSessionState(sessionId)).current
   const didHydrateSavedState = useRef(Boolean(savedState))
-  const defaultWizardForm = {
-    namaProduk: '',
-    kategori: '',
-    keunggulan: '',
-    targetAudience: '',
-    painPoint: '',
-    harga: '',
-    platform: [],
-    kompetitor: '',
-    catatan: ''
-  }
   const [productContext, setProductContext] = useState(savedState?.productContext || '')
   const [wizardStep, setWizardStep] = useState(savedState?.wizardStep || 1)
   const [wizardForm, setWizardForm] = useState(savedState?.wizardForm || defaultWizardForm)
@@ -1196,6 +1300,10 @@ export default function App() {
   const [additionalInput, setAdditionalInput] = useState(savedState?.additionalInput || '')
   const [modelAvailability, setModelAvailability] = useState(null)
   const fileRef = useRef()
+
+  useEffect(() => {
+    setSessionList(readSessionList(userId))
+  }, [userId])
 
   const buildProductContext = () => `
 Product name: ${wizardForm.namaProduk}
@@ -1219,7 +1327,7 @@ Additional notes: ${wizardForm.catatan}
 
   useEffect(() => {
     if (loading) return
-    writeSessionState(sessionId, {
+    const state = {
       productContext,
       wizardStep,
       wizardForm,
@@ -1229,6 +1337,27 @@ Additional notes: ${wizardForm.catatan}
       model,
       result,
       additionalInput,
+    }
+    writeSessionState(sessionId, state)
+    setSessionList(prev => {
+      const existing = prev.length ? prev : readSessionList(userId)
+      const current = existing.some(session => session.id === sessionId)
+        ? existing
+        : [{ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() }, ...existing]
+      const updated = current
+        .map(session => session.id === sessionId
+          ? {
+            ...session,
+            title: getSessionTitle(state),
+            updatedAt: Date.now(),
+            hasResult: Boolean(result),
+            usage: getSessionUsage(state),
+          }
+          : session)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, MAX_SESSIONS)
+      writeSessionList(userId, updated)
+      return updated
     })
   }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading])
 
@@ -1261,6 +1390,75 @@ Additional notes: ${wizardForm.catatan}
         ? prev.platform.filter(item => item !== platform)
         : [...prev.platform, platform]
     }))
+  }
+
+  const loadSessionState = (nextSessionId) => {
+    const nextState = readSessionState(nextSessionId) || getEmptySessionState()
+    didHydrateSavedState.current = true
+    setSessionId(nextSessionId)
+    localStorage.setItem(SESSION_KEY, nextSessionId)
+    setProductContext(nextState.productContext || '')
+    setWizardStep(nextState.wizardStep || 1)
+    setWizardForm(nextState.wizardForm || defaultWizardForm)
+    setUploadedFiles(nextState.uploadedFiles || [])
+    setRunHagen(nextState.runHagen || false)
+    const nextProvider = nextState.provider || DEFAULT_PROVIDER
+    setProvider(nextProvider)
+    setModel(
+      nextState.model && PROVIDER_MODELS[nextProvider]?.includes(nextState.model)
+        ? nextState.model
+        : getDefaultModel(nextProvider)
+    )
+    setResult(nextState.result || null)
+    setAdditionalInput(nextState.additionalInput || '')
+    setShowFeedback(Boolean(nextState.result))
+    setCompletedSteps([])
+    setCurrentStep(null)
+    setError(null)
+    if (window.innerWidth <= 980) setSidebarOpen(false)
+  }
+
+  const createNewSession = async () => {
+    const existing = readSessionList(userId)
+    const nextId = uuidv4()
+    const now = Date.now()
+    const evicted = [...existing, { id: nextId, updatedAt: now }]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(MAX_SESSIONS)
+
+    evicted.forEach(session => {
+      clearSessionState(session.id)
+      clearMemory(session.id, userId).catch(() => { })
+    })
+
+    const nextList = [
+      { id: nextId, title: 'New conversation', createdAt: now, updatedAt: now, hasResult: false, usage: 0 },
+      ...existing.filter(session => !evicted.some(old => old.id === session.id)),
+    ].slice(0, MAX_SESSIONS)
+    writeSessionList(userId, nextList)
+    setSessionList(nextList)
+    writeSessionState(nextId, getEmptySessionState())
+    loadSessionState(nextId)
+  }
+
+  const handleNewSession = async () => {
+    if (loading || newChatDisabled) return
+    const existing = readSessionList(userId)
+    if (existing.length >= MAX_SESSIONS) {
+      setShowNewChatWarning(true)
+      return
+    }
+    await createNewSession()
+  }
+
+  const handleConfirmNewSession = async () => {
+    setShowNewChatWarning(false)
+    await createNewSession()
+  }
+
+  const handleSelectSession = (nextSessionId) => {
+    if (loading || nextSessionId === sessionId) return
+    loadSessionState(nextSessionId)
   }
 
   const getExportText = () => {
@@ -1315,17 +1513,25 @@ Additional notes: ${wizardForm.catatan}
   const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
   const canRun = stepOneValid && stepTwoValid && stepThreeValid
   const canContinue = isMeaningfulText(additionalInput, 8)
+  const activeSessionState = { productContext, wizardForm, uploadedFiles, additionalInput, result }
+  const sessionUsage = getSessionUsage(activeSessionState)
+  const sessionUsagePercent = Math.min(100, Math.round((sessionUsage / MAX_SESSION_CHARS) * 100))
+  const sessionLimitReached = sessionUsage >= MAX_SESSION_CHARS
+  const newChatDisabled = loading || sessionList.some(session => {
+    const state = session.id === sessionId ? activeSessionState : readSessionState(session.id)
+    return isSessionUnusedState(state)
+  })
 
   const handleFileUpload = useCallback(async (files) => {
     for (const file of Array.from(files)) {
       try {
-        const res = await uploadFile(sessionId, file)
+        const res = await uploadFile(sessionId, file, userId)
         setUploadedFiles(prev => [...prev, { name: file.name, preview: res.preview }])
       } catch (error) {
         setError(`Upload failed: ${file.name}. ${error.message}`)
       }
     }
-  }, [sessionId])
+  }, [sessionId, userId])
 
   const stepList = runHagen
     ? [...STEPS, { id: 'hagen', agent: 'hagen', label: 'Hagen is generating the execution script...' }]
@@ -1355,7 +1561,7 @@ Additional notes: ${wizardForm.catatan}
 
     try {
       const [data] = await Promise.all([
-        runAgents({ sessionId, productContext, runHagen, opts: { provider, model } }),
+        runAgents({ sessionId, userId, productContext, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
@@ -1368,6 +1574,10 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleContinue = async () => {
+    if (sessionLimitReached) {
+      setError('This session is already too long. Start a new conversation from the sidebar so the agents have a cleaner context and quota lasts longer.')
+      return
+    }
     if (!canContinue || !productContext.trim()) {
       setError('Additional input is still too short. Add specific context, such as target buyer, budget, pain point, or the requested concept revision.')
       return
@@ -1380,7 +1590,7 @@ Additional notes: ${wizardForm.catatan}
     try {
       const note = additionalInput.trim()
       const [data] = await Promise.all([
-        continueSession({ sessionId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
+        continueSession({ sessionId, userId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
@@ -1395,7 +1605,7 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleClear = async () => {
-    await clearMemory(sessionId)
+    await clearMemory(sessionId, userId)
     clearSessionState(sessionId)
     setResult(null)
     setCompletedSteps([])
@@ -1420,6 +1630,13 @@ Additional notes: ${wizardForm.catatan}
     setShowFeedback(false)
     setAdditionalInput('')
     setError(null)
+    setSessionList(prev => {
+      const updated = prev.map(session => session.id === sessionId
+        ? { ...session, title: 'New conversation', hasResult: false, usage: 0, updatedAt: Date.now() }
+        : session)
+      writeSessionList(userId, updated)
+      return updated
+    })
   }
 
   return (
@@ -1427,11 +1644,10 @@ Additional notes: ${wizardForm.catatan}
       {/* Header */}
       <header className="app-header" style={{
         borderBottom: '1px solid var(--border)',
-        padding: '14px 20px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, background: 'rgba(10,10,11,0.9)',
-        backdropFilter: 'blur(12px)', zIndex: 100,
-        gap: 12, flexWrap: 'wrap',
+        background: 'rgba(10,10,11,0.9)',
+        backdropFilter: 'blur(12px)',
+        gap: 12,
       }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 400, letterSpacing: '-0.01em' }}>
@@ -1439,6 +1655,24 @@ Additional notes: ${wizardForm.catatan}
           </h1>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(open => !open)}
+            className="icon-btn"
+            aria-label={sidebarOpen ? 'Close chat history' : 'Open chat history'}
+            title={sidebarOpen ? 'Close history' : 'Open history'}
+          >
+            {sidebarOpen ? 'Close' : 'Menu'}
+          </button>
+          <button
+            type="button"
+            onClick={handleNewSession}
+            disabled={newChatDisabled}
+            className="header-action-btn"
+            title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+          >
+            New chat
+          </button>
           {Object.entries(AGENTS).map(([key, a]) => (
             <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: a.color }} />
@@ -1459,9 +1693,102 @@ Additional notes: ${wizardForm.catatan}
         </div>
       </header>
 
-      <div className="app-page" style={{ maxWidth: 1280, margin: '0 auto', width: '100%' }}>
+      {sidebarOpen && <div className="history-backdrop" onClick={() => setSidebarOpen(false)} />}
+
+      {showNewChatWarning && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowNewChatWarning(false)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-chat-warning-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">History limit</div>
+            <h2 id="new-chat-warning-title">Buat chat baru?</h2>
+            <p>
+              History chat sudah mencapai batas 3 sesi. Jika membuat chat ke-4, sesi paling lama akan terhapus otomatis.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setShowNewChatWarning(false)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleConfirmNewSession}
+              >
+                Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <aside className={`history-sidebar ${sidebarOpen ? 'open' : ''}`} aria-label="Chat history">
+        <div className="history-sidebar-head">
+          <div>
+            <div className="history-eyebrow">History</div>
+            <div className="history-title">Conversations</div>
+          </div>
+          <button type="button" onClick={() => setSidebarOpen(false)} className="icon-btn" aria-label="Close history">Close</button>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleNewSession}
+          disabled={newChatDisabled}
+          className="new-chat-btn"
+          title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+        >
+          + New chat
+        </button>
+
+        <div className="history-list">
+          {sessionList.map(session => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => handleSelectSession(session.id)}
+              className={`history-item ${session.id === sessionId ? 'active' : ''}`}
+              disabled={loading}
+            >
+              <span className="history-item-title">{session.title || 'New conversation'}</span>
+              <span className="history-item-meta">
+                {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="history-note">
+          Maksimal 3 sesi per akun. Saat membuat sesi ke-4, sesi paling lama dihapus otomatis.
+        </div>
+      </aside>
+
+      <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`} style={{ maxWidth: 1280, margin: '0 auto', width: '100%' }}>
         {/* LEFT PANEL */}
         <div className="app-left-panel">
+          <div className={`session-meter ${sessionUsage >= SESSION_WARNING_CHARS ? 'warning' : ''}`}>
+            <div className="session-meter-row">
+              <span>Session context</span>
+              <span>{sessionUsagePercent}%</span>
+            </div>
+            <div className="session-meter-track">
+              <div className="session-meter-fill" style={{ width: `${sessionUsagePercent}%` }} />
+            </div>
+            <p>
+              {sessionLimitReached
+                ? 'Session limit reached. Start a new chat for cleaner results.'
+                : sessionUsage >= SESSION_WARNING_CHARS
+                  ? 'This chat is getting long. A new chat will protect quality and quota.'
+                  : 'Keep each session focused for better agent output.'}
+            </p>
+          </div>
 
           {/* Product input */}
           <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
@@ -1981,14 +2308,14 @@ Additional notes: ${wizardForm.catatan}
                   </span>
                   <button
                     onClick={handleContinue}
-                    disabled={loading || !canContinue}
+                    disabled={loading || !canContinue || sessionLimitReached}
                     style={{
                       padding: '10px 16px',
-                      background: loading || !canContinue ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
-                      border: `1px solid ${loading || !canContinue ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
-                      color: loading || !canContinue ? 'var(--text-3)' : 'var(--rana)',
+                      background: loading || !canContinue || sessionLimitReached ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
+                      border: `1px solid ${loading || !canContinue || sessionLimitReached ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
+                      color: loading || !canContinue || sessionLimitReached ? 'var(--text-3)' : 'var(--rana)',
                       borderRadius: 8, fontSize: 13,
-                      cursor: loading || !canContinue ? 'not-allowed' : 'pointer',
+                      cursor: loading || !canContinue || sessionLimitReached ? 'not-allowed' : 'pointer',
                       fontFamily: 'var(--font-body)',
                     }}
                   >
@@ -1999,7 +2326,7 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Feedback */}
               {showFeedback && (
-                <FeedbackBar sessionId={sessionId} onDone={() => setShowFeedback(false)} />
+                <FeedbackBar sessionId={sessionId} userId={userId} onDone={() => setShowFeedback(false)} />
               )}
             </>
           )}

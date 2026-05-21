@@ -11,7 +11,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Optional, Annotated
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -264,17 +264,35 @@ async def get_all_availabilities():
             results[provider][model_name] = await check_provider_model_availability(provider, model_name)
     return results
 
-# Memory store.
+# Memory store. The key includes user_id so future Firebase Auth users do not share sessions.
 session_memory: dict[str, list] = {}
 rana_learning: list[dict] = []  # Store cross-session feedback.
+MAX_SESSION_MESSAGES = int(os.environ.get("MAX_SESSION_MESSAGES", "14"))
 
 
-def get_memory(session_id: str) -> list:
-    return session_memory.get(session_id, [])
+def memory_key(session_id: str, user_id: Optional[str] = None) -> str:
+    scoped_user = (user_id or "guest").strip() or "guest"
+    return f"{scoped_user}:{session_id}"
 
 
-def save_memory(session_id: str, messages: list):
-    session_memory[session_id] = messages[-20:]  # Keep the latest 20 messages.
+def get_memory(session_id: str, user_id: Optional[str] = None) -> list:
+    return session_memory.get(memory_key(session_id, user_id), [])
+
+
+def save_memory(session_id: str, messages: list, user_id: Optional[str] = None):
+    session_memory[memory_key(session_id, user_id)] = messages[-MAX_SESSION_MESSAGES:]
+
+
+def ensure_session_capacity(session_id: str, user_id: Optional[str] = None, added_messages: int = 0):
+    current_size = len(get_memory(session_id, user_id))
+    if current_size + added_messages >= MAX_SESSION_MESSAGES:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "This conversation is getting too long for one session. "
+                "Start a new conversation so the agents can keep enough context and avoid wasting quota."
+            ),
+        )
 
 
 # Agent state.
@@ -380,7 +398,7 @@ def call_claude(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
     max_continuations: int = 2,
 ) -> str:
     messages: list[MessageParam] = [
@@ -430,7 +448,7 @@ def call_gemini(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["gemini"]:
         raise HTTPException(
@@ -473,7 +491,7 @@ def call_openrouter(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["openrouter"]:
         raise HTTPException(
@@ -521,7 +539,7 @@ def call_openai(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["openai"]:
         raise HTTPException(
@@ -577,7 +595,7 @@ def call_grok(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["grok"]:
         raise HTTPException(
@@ -634,7 +652,7 @@ def call_model(
     model_name: str,
     system: str,
     user_message: str,
-    max_tokens: int = 2000,
+    max_tokens: int = 5000,
 ) -> str:
     model = get_model(model_name, provider)
     if provider == "anthropic":
@@ -654,7 +672,7 @@ def call_model(
     )
 
 
-def call_claude_stream(system: str, user_message: str, max_tokens: int = 2000):
+def call_claude_stream(system: str, user_message: str, max_tokens: int = 5000):
     """Stream a Claude response."""
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
@@ -777,7 +795,7 @@ def repair_truncated_json(text: str) -> str:
     return text
 
 
-def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 4000) -> str:
+def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 5000) -> str:
     prompt = render_prompt("json_repair", {
         "SCHEMA_HINT": schema_hint,
         "RAW_OUTPUT": raw_text,
@@ -792,7 +810,7 @@ def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 40
     return repair_truncated_json(strip_json_fence(converted))
 
 
-def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, max_tokens: int = 4000) -> str:
+def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, max_tokens: int = 5000) -> str:
     cleaned = repair_truncated_json(strip_json_fence(raw_text))
     if is_valid_json(cleaned):
         return cleaned
@@ -955,9 +973,9 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=4000)
+    result = call_model(provider, model_name, system, prompt, max_tokens=5000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_rana_final"), max_tokens=4000)
+        result, load_prompt("schema_rana_final"), max_tokens=5000)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1035,6 +1053,7 @@ compiled_graph = build_graph()
 # API endpoints.
 class RunRequest(BaseModel):
     session_id: str
+    user_id: Optional[str] = None
     product_context: str
     run_hagen: bool = False
     opts: Optional[dict[str, str]] = None
@@ -1046,6 +1065,7 @@ class ContinueRequest(RunRequest):
 
 class FeedbackRequest(BaseModel):
     session_id: str
+    user_id: Optional[str] = None
     feedback: str
 
 
@@ -1165,7 +1185,8 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
 async def run_agents(request: RunRequest):
     """Run the full multi-agent pipeline."""
     validate_product_context(request.product_context)
-    history = get_memory(request.session_id)
+    ensure_session_capacity(request.session_id, request.user_id, added_messages=6)
+    history = get_memory(request.session_id, request.user_id)
 
     initial_state: AgentState = {
         "session_id": request.session_id,
@@ -1198,7 +1219,7 @@ async def run_agents(request: RunRequest):
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"])
+    save_memory(request.session_id, result["messages"], request.user_id)
 
     return {
         "session_id": request.session_id,
@@ -1221,7 +1242,8 @@ async def continue_agents(request: ContinueRequest):
             detail="additional_input is too short. Add specific context for the revision."
         )
 
-    history = get_memory(request.session_id)
+    ensure_session_capacity(request.session_id, request.user_id, added_messages=7)
+    history = get_memory(request.session_id, request.user_id)
     additional_entry = {
         "role": "user",
         "content": f"[USER ADDITIONAL INPUT]\n{request.additional_input.strip()}"
@@ -1265,7 +1287,7 @@ Use this additional input to complete or revise the previous output in this sess
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"])
+    save_memory(request.session_id, result["messages"], request.user_id)
 
     return {
         "session_id": request.session_id,
@@ -1281,6 +1303,7 @@ Use this additional input to complete or revise the previous output in this sess
 @app.post("/api/upload")
 async def upload_file(
     session_id: str = Form(...),
+    user_id: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
     """Upload a product brief or document."""
@@ -1314,13 +1337,14 @@ async def upload_file(
             detail="Uploaded file does not contain enough readable text."
         )
 
-    if session_id not in session_memory:
-        session_memory[session_id] = []
+    key = memory_key(session_id, user_id)
+    if key not in session_memory:
+        session_memory[key] = []
 
     # Store uploaded file text in session memory.
     file_entry = f"[FILE: {filename}]\n{text_content[:3000]}"
-    session_memory[session_id].append({"role": "user", "content": file_entry})
-    save_memory(session_id, session_memory[session_id])
+    session_memory[key].append({"role": "user", "content": file_entry})
+    save_memory(session_id, session_memory[key], user_id)
 
     return {"status": "ok", "file_name": filename, "preview": text_content[:200]}
 
@@ -1334,6 +1358,7 @@ async def save_feedback(data: FeedbackRequest):
 
     rana_learning.append({
         "session_id": data.session_id,
+        "user_id": data.user_id or "guest",
         "insight": data.feedback,
         "timestamp": str(asyncio.get_event_loop().time())
     })
@@ -1341,13 +1366,13 @@ async def save_feedback(data: FeedbackRequest):
 
 
 @app.get("/api/memory/{session_id}")
-async def get_session_memory(session_id: str):
-    return {"messages": get_memory(session_id)}
+async def get_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
+    return {"messages": get_memory(session_id, user_id)}
 
 
 @app.delete("/api/memory/{session_id}")
-async def clear_session_memory(session_id: str):
-    session_memory.pop(session_id, None)
+async def clear_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
+    session_memory.pop(memory_key(session_id, user_id), None)
     return {"status": "cleared"}
 
 
