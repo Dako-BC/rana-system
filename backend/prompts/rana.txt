@@ -33,6 +33,15 @@ LANGUAGE RULE:
 
 Always return valid JSON only.
 
+OUTPUT STRICT RULES:
+- Return ONLY valid JSON. Do not include any explanatory text outside the JSON object.
+- Do not use markdown, headings, or code fences anywhere.
+- Keep every string concise and avoid newline characters inside string values.
+- Limit arrays to a maximum of 5 items unless the schema explicitly requires more.
+- Do not include trailing commas or comments.
+- Avoid deeply nested objects; prefer flat structures and small subsections.
+- Do not include any internal/debug fields (fields starting with `_` or named `raw_output`).
+
 BRAND SAFETY:
 - Reject or flag concepts that position the product as a medical replacement.
 - Reject unsupported superlatives such as "best" or "only".

@@ -67,6 +67,48 @@ function Divider() {
   return <div style={{ height: 1, background: T.border, margin: '1.25rem 0' }} />
 }
 
+function readableKey(key) {
+  return String(key || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function formatReadableValue(value, depth = 0) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value.map((item, index) => {
+      const prefix = typeof item === 'object' && item !== null ? `${index + 1}. ` : `- `
+      return `${prefix}${formatReadableValue(item, depth + 1)}`
+    }).join('\n')
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([k]) => !String(k).startsWith('_') && k !== 'raw_output')
+      .map(([k, v]) => `${readableKey(k)}:\n${formatReadableValue(v, depth + 1)}`)
+      .join('\n\n')
+  }
+  return String(value)
+}
+
+function cleanRawTextForDisplay(value) {
+  return String(value || '')
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, ' ')
+    .replace(/\\"/g, '"')
+    .replace(/"\s*,\s*"/g, '"\n"')
+    .replace(/}\s*,\s*{/g, '}\n{')
+    .replace(/[{}\[\]",]/g, '')
+    .replace(/^\s*raw_output\s*:\s*/gim, '')
+    .replace(/^\s*_[a-z_]+\s*:\s*.*$/gim, '')
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*"?(.*?)"?\s*:\s*/, (_, key) => `${readableKey(key)}: `).trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
 // Hara output.
 function HaraCard({ data }) {
   const c = T.agents.hara.color
@@ -559,7 +601,7 @@ export function formatAsPlainText(agent, data) {
   if (key === 'rana') {
     const alasan = typeof data.choice_rationale === 'string'
       ? data.choice_rationale
-      : JSON.stringify(data.choice_rationale, null, 2)
+      : formatReadableValue(data.choice_rationale)
     return [
       data.user_summary && `Summary:\n${data.user_summary}`,
       data.top_image_ads && `Selected Image Ads: ${data.top_image_ads.map(n => `#${n}`).join(', ')}`,
@@ -593,32 +635,97 @@ export function formatAsPlainText(agent, data) {
 
   // Flatten fallback output into readable text.
   return Object.entries(data)
-    .map(([k, v]) => `${k}:\n${typeof v === 'object' ? JSON.stringify(v, null, 2) : v}`)
+    .map(([k, v]) => `${readableKey(k)}:\n${formatReadableValue(v)}`)
     .join('\n\n')
 }
 
 export default function AgentOutputCard({ agent, rawOutput, loading = false }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   const agentKey = agent === 'rana_validate' || agent === 'rana_final' ? 'rana' : agent
   const meta = T.agents[agentKey] || T.agents.rana
   const c = meta.color
 
-  // Parse JSON output.
-  let parsed = null
-  let parseError = false
-  if (rawOutput) {
-    if (typeof rawOutput === 'object') {
-      parsed = rawOutput
-    } else {
-      try {
-        // Strip markdown code fences if present
-        const clean = rawOutput.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim()
-        parsed = JSON.parse(clean)
-      } catch {
-        parseError = true
+  // Safe parse helper: attempt multiple strategies and never truncate original text.
+  function safeParseAgentOutput(raw) {
+    if (!raw && raw !== '') return { parsed: null, parseError: false, rawText: '' }
+    // If already an object, return it (clone to avoid mutation)
+    if (typeof raw === 'object') return { parsed: raw, parseError: false, rawText: '' }
+
+    const rawText = String(raw || '')
+
+    // Remove JSON fences
+    let clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+
+    // Try direct parse
+    try {
+      return { parsed: JSON.parse(clean), parseError: false, rawText }
+    } catch (e) {
+      // continue
+    }
+
+    // Try to extract first { ... } or [ ... ] balanced substring
+    const firstBrace = Math.min(...[clean.indexOf('{') !== -1 ? clean.indexOf('{') : Infinity, clean.indexOf('[') !== -1 ? clean.indexOf('[') : Infinity])
+    if (firstBrace !== Infinity) {
+      // find matching last bracket by scanning
+      let stack = []
+      let inStr = false
+      let esc = false
+      for (let i = firstBrace; i < clean.length; i++) {
+        const ch = clean[i]
+        if (esc) { esc = false; continue }
+        if (ch === '\\' && inStr) { esc = true; continue }
+        if (ch === '"') { inStr = !inStr; continue }
+        if (inStr) continue
+        if (ch === '{') stack.push('}')
+        else if (ch === '[') stack.push(']')
+        else if ((ch === '}' || ch === ']')) {
+          if (stack.length && stack[stack.length-1] === ch) stack.pop()
+          if (!stack.length) {
+            const candidate = clean.slice(firstBrace, i+1).trim()
+            try { return { parsed: JSON.parse(candidate), parseError: false, rawText } } catch (_) {}
+          }
+        }
       }
     }
+
+    // Try to unescape common escaped JSON (e.g. stringified JSON inside quotes)
+    try {
+      const unescaped = clean.replace(/\\n/g, '\n').replace(/\\\"/g, '"').replace(/\\\\/g, '\\')
+      return { parsed: JSON.parse(unescaped), parseError: false, rawText }
+    } catch (_) {}
+
+    // If everything fails, return parseError and keep full raw text for readable rendering
+    return { parsed: null, parseError: true, rawText }
+  }
+
+  function isTechnicalKey(k) {
+    return typeof k === 'string' && (k.startsWith('_') || ['raw_output', 'debug', 'error_stack', '_warning', '_parse_error'].includes(k))
+  }
+
+  function sanitizeForUI(o) {
+    if (Array.isArray(o)) return o.map(sanitizeForUI)
+    if (o && typeof o === 'object') {
+      const out = {}
+      for (const [k, v] of Object.entries(o)) {
+        if (isTechnicalKey(k)) continue
+        out[k] = sanitizeForUI(v)
+      }
+      return out
+    }
+    return o
+  }
+
+  // Parse only when expanded to avoid unnecessary work and to ensure collapsed view shows no body.
+  let parsed = null
+  let parseError = false
+  let rawText = ''
+  if (expanded && rawOutput !== undefined && rawOutput !== null) {
+    const res = safeParseAgentOutput(rawOutput)
+    parsed = res.parsed
+    parseError = res.parseError
+    rawText = res.rawText
+    if (parsed) parsed = sanitizeForUI(parsed)
   }
 
   return (
@@ -669,13 +776,16 @@ export default function AgentOutputCard({ agent, rawOutput, loading = false }) {
           )}
 
           {!loading && parseError && (
-            <div style={{ color: '#f97316', fontSize: '0.85rem', lineHeight: 1.6 }}>
-              ⚠ The agent output cannot be displayed. Please run again.
+            <div style={{ color: T.text, fontSize: '0.85rem', lineHeight: 1.7 }}>
+              <div style={{ marginBottom: '0.5rem', fontWeight: 700, color: c }}>Agent Output</div>
+              <div style={{ background: T.surface3, borderRadius: 8, padding: '0.75rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {cleanRawTextForDisplay(rawText)}
+              </div>
             </div>
           )}
 
           {!loading && parsed && (
-            <>
+            <div>
               {agentKey === 'hara' && <HaraCard data={parsed} />}
               {agentKey === 'bombom' && <BombomCard data={parsed} />}
               {agentKey === 'luna' && <LunaCard data={parsed} />}
