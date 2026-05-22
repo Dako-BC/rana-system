@@ -83,6 +83,11 @@ PROVIDER_MODELS = {
         "mistralai/mistral-small-3.1-24b-instruct",
         "openai/gpt-4o-mini",
     ],
+    "groq": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+    ],
 }
 
 DEFAULT_MODEL_BY_PROVIDER = {
@@ -95,6 +100,7 @@ API_KEYS = {
     "openai": os.environ.get("OPENAI_API_KEY"),
     "gemini": os.environ.get("GOOGLE_GEMINI_API_KEY"),
     "openrouter": os.environ.get("OPENROUTER_API_KEY"),
+    "groq": os.environ.get("GROQ_API_KEY"),
 }
 
 
@@ -239,12 +245,42 @@ async def check_openrouter_availability(model: str):
     except Exception as e:
         return {"available": False, "reason": f"Error: {str(e)}"}
 
+
+async def check_groq_availability(model: str):
+    if not API_KEYS["groq"]:
+        return {"available": False, "reason": "API key not set"}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {API_KEYS['groq']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "test"}],
+                },
+                timeout=10.0,
+            )
+        if response.status_code == 200:
+            return {"available": True, "quota": "Free tier - check console.groq.com"}
+        elif response.status_code == 401 or response.status_code == 403:
+            return {"available": False, "reason": "Invalid API key"}
+        elif response.status_code == 429:
+            return {"available": False, "reason": "Rate limit exceeded"}
+        else:
+            return {"available": False, "reason": f"API error: {response.status_code}"}
+    except Exception as e:
+        return {"available": False, "reason": f"Error: {str(e)}"}
 AVAILABILITY_CHECKERS = {
     "anthropic": check_anthropic_availability,
     "grok": check_grok_availability,
     "openai": check_openai_availability,
     "gemini": check_gemini_availability,
     "openrouter": check_openrouter_availability,
+    "groq": check_groq_availability,
 }
 
 
@@ -648,6 +684,62 @@ def call_grok(
         )
 
 
+def call_groq(
+    system: str,
+    user_message: str,
+    model: str,
+    max_tokens: int = 5000,
+) -> str:
+    if not API_KEYS["groq"]:
+        raise HTTPException(
+            status_code=503,
+            detail="GROQ_API_KEY not set. Groq requests cannot be processed."
+        )
+
+    try:
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEYS['groq']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
+                ],
+            },
+            timeout=30.0,
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Groq API error: {response.status_code}. "
+                    f"Response: {response.text}"
+                ),
+            )
+
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise HTTPException(
+                status_code=502,
+                detail="Groq API returned no choices. Check the API response."
+            )
+        return choices[0].get("message", {}).get("content", "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Groq API connection error: {str(e)}"
+        )
+
+
 def call_model(
     provider: str,
     model_name: str,
@@ -666,10 +758,12 @@ def call_model(
         return call_grok(system, user_message, model, max_tokens=max_tokens)
     if provider == "openrouter":
         return call_openrouter(system, user_message, model, max_tokens=max_tokens)
+    if provider == "groq":
+        return call_groq(system, user_message, model, max_tokens=max_tokens)
 
     raise HTTPException(
         status_code=400,
-        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok, openrouter."
+        detail=f"Provider '{provider}' is not supported by the backend yet. Supported providers: anthropic, gemini, openai, grok, openrouter, groq."
     )
 
 
