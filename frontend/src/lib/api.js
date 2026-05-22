@@ -62,9 +62,10 @@ export async function continueSession({ sessionId, userId, productContext, addit
   return res.json()
 }
 
-export async function uploadFile(sessionId, file) {
+export async function uploadFile(sessionId, file, userId) {
   const form = new FormData()
   form.append('session_id', sessionId)
+  if (userId) form.append('user_id', userId)
   form.append('file', file)
   const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
@@ -74,7 +75,7 @@ export async function uploadFile(sessionId, file) {
   return res.json()
 }
 
-export async function saveFeedback(sessionId, feedback, userId = 'anonymous') {
+export async function saveFeedback(sessionId, feedback, userId) {
   const res = await fetch(apiUrl('/api/feedback'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -84,8 +85,9 @@ export async function saveFeedback(sessionId, feedback, userId = 'anonymous') {
   return res.json()
 }
 
-export async function clearMemory(sessionId) {
-  const res = await fetch(apiUrl(`/api/memory/${sessionId}`), { method: 'DELETE' })
+export async function clearMemory(sessionId, userId) {
+  const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
+  const res = await fetch(apiUrl(`/api/memory/${sessionId}${query}`), { method: 'DELETE' })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }

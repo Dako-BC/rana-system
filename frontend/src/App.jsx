@@ -4,16 +4,67 @@ import { runAgents, continueSession, uploadFile, saveFeedback, clearMemory, getM
 
 // Helpers.
 const SESSION_KEY = 'rana_session_id'
+const USER_KEY = 'rana_guest_user_id'
+const SESSION_LIST_PREFIX = 'rana_session_list:'
 const SESSION_STATE_PREFIX = 'rana_session_state:'
-const ACTIVE_USER_KEY = 'rana_active_user'
-const USER_CURRENT_SESSION_PREFIX = 'rana_current_session:'
-const USER_HISTORY_PREFIX = 'rana_history:'
-const MAX_HISTORY_SESSIONS = 3
-const MAX_CONTINUES_PER_SESSION = 5
-const SESSION_DATA_VERSION = 'output-renderer-v2'
-const getSessionId = () => {
-  let id = localStorage.getItem(SESSION_KEY)
-  if (!id) { id = uuidv4(); localStorage.setItem(SESSION_KEY, id) }
+const MAX_SESSIONS = 3
+const MAX_SESSION_CHARS = 18000
+const SESSION_WARNING_CHARS = 13000
+const defaultWizardForm = {
+  namaProduk: '',
+  kategori: '',
+  keunggulan: '',
+  targetAudience: '',
+  painPoint: '',
+  harga: '',
+  platform: [],
+  kompetitor: '',
+  catatan: ''
+}
+
+const getUserId = () => {
+  let id = localStorage.getItem(USER_KEY)
+  if (!id) {
+    id = `guest_${uuidv4()}`
+    localStorage.setItem(USER_KEY, id)
+  }
+  return id
+}
+
+const getSessionListKey = (userId) => `${SESSION_LIST_PREFIX}${userId || 'guest'}`
+
+function readSessionList(userId) {
+  try {
+    const raw = localStorage.getItem(getSessionListKey(userId))
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeSessionList(userId, sessions) {
+  try {
+    localStorage.setItem(getSessionListKey(userId), JSON.stringify(sessions.slice(0, MAX_SESSIONS)))
+  } catch { }
+}
+
+const getSessionId = (userId) => {
+  const existing = localStorage.getItem(SESSION_KEY)
+  const sessions = readSessionList(userId)
+  if (existing && sessions.some(session => session.id === existing)) return existing
+
+  const id = sessions[0]?.id || uuidv4()
+  localStorage.setItem(SESSION_KEY, id)
+  if (!sessions.length) {
+    writeSessionList(userId, [{
+      id,
+      title: 'New conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasResult: false,
+    }])
+  }
   return id
 }
 
@@ -22,18 +73,7 @@ const getSessionStateKey = (sessionId) => `${SESSION_STATE_PREFIX}${sessionId}`
 function readSessionState(sessionId) {
   try {
     const raw = localStorage.getItem(getSessionStateKey(sessionId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (parsed?.sessionDataVersion !== SESSION_DATA_VERSION) {
-      return {
-        ...parsed,
-        sessionDataVersion: SESSION_DATA_VERSION,
-        result: null,
-        additionalInput: '',
-        continueCount: 0,
-      }
-    }
-    return parsed
+    return raw ? JSON.parse(raw) : null
   } catch {
     return null
   }
@@ -41,10 +81,7 @@ function readSessionState(sessionId) {
 
 function writeSessionState(sessionId, state) {
   try {
-    localStorage.setItem(getSessionStateKey(sessionId), JSON.stringify({
-      ...state,
-      sessionDataVersion: SESSION_DATA_VERSION,
-    }))
+    localStorage.setItem(getSessionStateKey(sessionId), JSON.stringify(state))
   } catch {
     // Ignore storage quota/private mode errors; the app can still run normally.
   }
@@ -56,167 +93,77 @@ function clearSessionState(sessionId) {
   } catch { }
 }
 
-function normalizeUserName(value) {
-  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 40)
-}
-
-function getUserStorageId(userName) {
-  return normalizeUserName(userName).toLowerCase()
-}
-
-function readActiveUser() {
-  try {
-    return normalizeUserName(localStorage.getItem(ACTIVE_USER_KEY))
-  } catch {
-    return ''
+function getEmptySessionState() {
+  return {
+    productContext: '',
+    wizardStep: 1,
+    wizardForm: defaultWizardForm,
+    uploadedFiles: [],
+    runHagen: false,
+    provider: DEFAULT_PROVIDER,
+    model: getDefaultModel(DEFAULT_PROVIDER),
+    result: null,
+    additionalInput: '',
   }
 }
 
-function writeActiveUser(userName) {
-  try {
-    localStorage.setItem(ACTIVE_USER_KEY, normalizeUserName(userName))
-  } catch { }
+function getSessionTitle(state) {
+  const productName = state?.wizardForm?.namaProduk?.trim()
+  if (productName) return productName.slice(0, 48)
+  const firstContextLine = String(state?.productContext || '').split('\n').find(Boolean)
+  if (firstContextLine) return firstContextLine.replace(/^Product name:\s*/i, '').slice(0, 48)
+  return 'New conversation'
 }
 
-function clearActiveUser() {
-  try {
-    localStorage.removeItem(ACTIVE_USER_KEY)
-  } catch { }
+function getSessionUsage(state) {
+  const payload = [
+    state?.productContext,
+    state?.additionalInput,
+    state?.result?.hara_output,
+    state?.result?.bombom_output,
+    state?.result?.luna_output,
+    state?.result?.hagen_output,
+    state?.result?.rana_decision,
+  ].filter(Boolean).join('\n')
+  return payload.length
 }
 
-function getUserHistoryKey(userName) {
-  return `${USER_HISTORY_PREFIX}${getUserStorageId(userName)}`
-}
-
-function getUserCurrentSessionKey(userName) {
-  return `${USER_CURRENT_SESSION_PREFIX}${getUserStorageId(userName)}`
-}
-
-function readUserHistory(userName) {
-  try {
-    const raw = localStorage.getItem(getUserHistoryKey(userName))
-    const parsed = raw ? JSON.parse(raw) : []
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function writeUserHistory(userName, history) {
-  try {
-    localStorage.setItem(getUserHistoryKey(userName), JSON.stringify(history.slice(0, MAX_HISTORY_SESSIONS)))
-  } catch { }
-}
-
-function readUserCurrentSession(userName) {
-  try {
-    return localStorage.getItem(getUserCurrentSessionKey(userName)) || ''
-  } catch {
-    return ''
-  }
-}
-
-function writeUserCurrentSession(userName, sessionId) {
-  try {
-    localStorage.setItem(getUserCurrentSessionKey(userName), sessionId)
-  } catch { }
-}
-
-function getNewSessionId(userName) {
-  return `${getUserStorageId(userName) || 'user'}-${uuidv4()}`
-}
-
-function getHistoryTitle(state) {
-  const name = state?.wizardForm?.namaProduk?.trim()
-  if (name) return name.slice(0, 48)
-  const contextName = String(state?.productContext || '').match(/Product name:\s*(.+)/i)?.[1]?.trim()
-  if (contextName) return contextName.slice(0, 48)
-  return 'Untitled session'
-}
-
-function getHistorySummary(state) {
-  const category = state?.wizardForm?.kategori?.trim()
-  const platform = Array.isArray(state?.wizardForm?.platform) ? state.wizardForm.platform.join(', ') : ''
-  return [category, platform].filter(Boolean).join(' | ') || 'Draft'
-}
-
-function upsertUserHistory(userName, sessionId, state) {
-  if (!userName || !sessionId) return { history: [], removed: [] }
-  const now = new Date().toISOString()
-  const existing = readUserHistory(userName)
-  const previous = existing.find(item => item.id === sessionId)
-  const entry = {
-    id: sessionId,
-    title: getHistoryTitle(state),
-    summary: getHistorySummary(state),
-    createdAt: previous?.createdAt || now,
-    updatedAt: now,
-  }
-  const next = [entry, ...existing.filter(item => item.id !== sessionId)].slice(0, MAX_HISTORY_SESSIONS)
-  const removed = existing.filter(item => !next.some(nextItem => nextItem.id === item.id))
-  removed.forEach(item => clearSessionState(item.id))
-  writeUserHistory(userName, next)
-  return { history: next, removed }
-}
-
-function removeUserHistorySession(userName, sessionId) {
-  const next = readUserHistory(userName).filter(item => item.id !== sessionId)
-  writeUserHistory(userName, next)
-  clearSessionState(sessionId)
-  return next
-}
-
-const TECHNICAL_KEYS = ['_status', '_warning', '_parse_error', 'raw_output']
-
-function isTechnicalKey(key) {
-  return TECHNICAL_KEYS.includes(key) || key.startsWith('_')
-}
-
-function cleanRawJsonText(raw) {
-  if (typeof raw !== 'string') return raw
-  let cleaned = raw.trim()
-  const fencedMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  if (fencedMatch) cleaned = fencedMatch[1].trim()
-  cleaned = cleaned
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\r/g, '\r')
-    .replace(/\\"/g, '"')
-    .replace(/\\'/g, "'")
-    .replace(/\\\\/g, '\\')
-    .trim()
-  return cleaned
+function isSessionUnusedState(state) {
+  if (!state) return true
+  if (state.result) return false
+  if ((state.uploadedFiles || []).length > 0) return false
+  if (getMeaningfulLength(state.additionalInput) > 0) return false
+  const form = state.wizardForm || {}
+  const formText = [
+    form.namaProduk,
+    form.kategori,
+    form.keunggulan,
+    form.targetAudience,
+    form.painPoint,
+    form.harga,
+    form.kompetitor,
+    form.catatan,
+    ...(form.platform || []),
+  ].join(' ')
+  return getMeaningfulLength(formText) === 0
 }
 
 function tryParseJson(str) {
   if (typeof str !== 'string') return null
-  const clean = str.trim()
-  if (!clean) return null
-
-  const tryParse = (value) => {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return null
+  try {
+    const parsed = JSON.parse(str)
+    if (parsed && typeof parsed === 'object') return parsed
+    return null
+  } catch {
+    const match = str.match(/(\{[\s\S]*\})/)
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1])
+        if (parsed && typeof parsed === 'object') return parsed
+      } catch { }
     }
+    return null
   }
-
-  const parsed = tryParse(clean)
-  if (parsed !== null) return parsed
-
-  const fencedMatch = clean.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fencedMatch) {
-    const fenced = tryParse(fencedMatch[1].trim())
-    if (fenced !== null) return fenced
-  }
-
-  if (!/^[\[{]/.test(clean)) return null
-
-  const escapedJson = clean.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, '\\')
-  const escapedParsed = tryParse(escapedJson)
-  if (escapedParsed !== null) return escapedParsed
-
-  return null
 }
 
 function humanizeKey(key) {
@@ -288,668 +235,54 @@ function InlineMarkdown({ text, style }) {
 
 function SummaryView({ data }) {
   if (typeof data === 'string') {
-    return <p style={{ margin: 0, color: 'var(--text)', fontSize: 13, lineHeight: 1.7 }}>{data}</p>
+    return <p style={{ margin: 0, color: 'var(--text)', fontSize: 13 }}>{data}</p>
   }
   if (typeof data === 'number' || typeof data === 'boolean') {
-    return <p style={{ margin: 0, color: 'var(--text)', fontSize: 13, lineHeight: 1.7 }}>{String(data)}</p>
+    return <p style={{ margin: 0, color: 'var(--text)', fontSize: 13 }}>{String(data)}</p>
   }
   if (Array.isArray(data)) {
     if (data.length === 0) return <p style={{ margin: 0, color: 'var(--text-3)', fontSize: 13 }}>No data.</p>
-    const primitives = data.every(item => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
-    if (primitives) {
-      return (
-        <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7 }}>
-          {data.map((item, index) => (
-            <li key={index} style={{ marginBottom: 6 }}>{String(item)}</li>
-          ))}
-        </ul>
-      )
-    }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {data.map((item, index) => (
+        {data.slice(0, 4).map((item, index) => (
           <div key={index} style={{ padding: 12, background: 'var(--bg4)', borderRadius: 10, border: '1px solid var(--border)' }}>
-            {typeof item === 'object' && item !== null ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>Item {index + 1}</div>
-                <SummaryView data={item} />
-              </div>
-            ) : (
-              <p style={{ margin: 0, color: 'var(--text-2)', fontSize: 13 }}>{String(item)}</p>
-            )}
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>Item {index + 1}</div>
+            <SummaryView data={item} />
           </div>
         ))}
+        {data.length > 4 && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>+ {data.length - 4} more items</div>
+        )}
       </div>
     )
   }
   if (typeof data === 'object' && data !== null) {
-    const entries = Object.entries(data).filter(([key]) => !isTechnicalKey(key))
-    if (entries.length === 0) return null
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {entries.map(([key, value]) => (
-          <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+      <div className="two-col-grid">
+        {Object.entries(data).map(([key, value]) => (
+          <div key={key}>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>
               {humanizeKey(key)}
             </div>
-            <div style={{ paddingLeft: 6 }}>
-              {typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-                ? <p style={{ margin: 0, color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7 }}>{String(value)}</p>
-                : <SummaryView data={value} />
-              }
-            </div>
+            {typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+              ? <p style={{ margin: 0, color: 'var(--text)', fontSize: 13 }}>{String(value)}</p>
+              : <SummaryView data={value} />
+            }
           </div>
         ))}
       </div>
     )
   }
-  return null
-}
-
-function cleanInvalidJsonForDisplay(raw) {
-  return String(raw || '')
-    .replace(/```(?:json)?/gi, '')
-    .replace(/```/g, '')
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, ' ')
-    .replace(/\\"/g, '"')
-    .replace(/"\s*,\s*"/g, '"\n"')
-    .replace(/}\s*,\s*{/g, '}\n{')
-    .replace(/[{}\[\]",]/g, '')
-    .replace(/^\s*raw_output\s*:\s*/gim, '')
-    .replace(/^\s*_[a-z_]+\s*:\s*.*$/gim, '')
-    .split(/\r?\n/)
-    .map(line => line.replace(/^\s*"?(.*?)"?\s*:\s*/, (_, key) => `${humanizeKey(key)}: `).trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
-function isShortPrimitiveList(items) {
-  return items.length > 0 && items.every(item => String(item ?? '').length <= 48 && !String(item ?? '').includes('\n'))
-}
-
-function isPrimitiveValue(value) {
-  return value === null || ['string', 'number', 'boolean'].includes(typeof value)
-}
-
-function isPrimitiveList(value) {
-  return Array.isArray(value) && value.every(item => isPrimitiveValue(item))
-}
-
-function isFlatObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.values(value).every(item => isPrimitiveValue(item) || isPrimitiveList(item))
-}
-
-function isWarningKey(key) {
-  return /warning|review|risk|rejection|reject|concern|caution|objection|needs_human|human_review|note/i.test(String(key || ''))
-}
-
-function isActionKey(key) {
-  return /next_steps|steps|recommendations|recommendation|action_items|checklist|todo|what_to_do/i.test(String(key || ''))
-}
-
-function getAgentItemLabel(agentKey, sectionKey) {
-  const key = String(sectionKey || '').toLowerCase()
-  if (agentKey === 'bombom') return 'Image Ad Concept'
-  if (agentKey === 'luna') return 'Video Concept'
-  if (agentKey === 'hagen') {
-    if (/scene|script|breakdown/.test(key)) return 'Execution Scene'
-    return 'Execution Item'
-  }
-  if (agentKey === 'hara') return 'Research Item'
-  if (agentKey === 'rana') return 'Supervisor Item'
-  return humanizeKey(sectionKey || 'Item')
-}
-
-function findHighlightEntry(data) {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
-  const priority = [
-    'user_summary', 'summary', 'market_analysis', 'ad_insight', 'key_insight',
-    'key_insight_for_creative_team', 'choice_rationale', 'rationale',
-    'main_pain_point', 'decision_trigger'
-  ]
-  const entries = Object.entries(data).filter(([key, value]) => !isTechnicalKey(key) && hasRenderableValue(value))
-  return entries.find(([key, value]) => priority.includes(key) && (typeof value === 'string' || isFlatObject(value))) || null
-}
-
-function normalizePlainLabel(label) {
-  return String(label || '')
-    .replace(/^#{1,4}\s+/, '')
-    .replace(/^\*\*|\*\*$/g, '')
-    .replace(/^[-*•]\s+/, '')
-    .replace(/^\d+\.\s+/, '')
-    .replace(/:$/, '')
-    .trim()
-}
-
-function toPlainObjectKey(label, used = {}) {
-  const base = normalizePlainLabel(label)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gi, '_')
-    .replace(/^_+|_+$/g, '') || 'section'
-  used[base] = (used[base] || 0) + 1
-  return used[base] === 1 ? base : `${base}_${used[base]}`
-}
-
-function addPlainValue(target, label, value, used) {
-  const key = toPlainObjectKey(label, used)
-  target[key] = value
-}
-
-function appendPlainContent(target, value) {
-  const text = String(value || '').trim()
-  if (!text) return
-  target.content = target.content ? `${target.content}\n${text}` : text
-}
-
-function appendPlainItem(target, value) {
-  const text = String(value || '').trim()
-  if (!text) return
-  if (!Array.isArray(target.items)) target.items = []
-  target.items.push(text)
-}
-
-function parsePlainTextReport(text) {
-  const raw = String(text || '').replace(/```(?:json|text)?/gi, '').replace(/```/g, '').trim()
-  if (!raw) return null
-
-  const lines = raw.split(/\r?\n/)
-  const keyValueLines = lines.filter(line => /^[-*•\s]*(?:\d+\.\s*)?[^:\n]{2,80}:\s*.*$/.test(line.trim()))
-  const headingLines = lines.filter(line => /^#{1,4}\s+\S+|^\*\*[^*]+\*\*:?$/.test(line.trim()))
-  if (keyValueLines.length < 2 && headingLines.length < 1) return null
-
-  const result = {}
-  const resultUsed = {}
-  let current = null
-  let currentUsed = {}
-  let currentChild = null
-  let currentChildUsed = {}
-
-  const ensureSection = (label = 'Output') => {
-    const section = {}
-    addPlainValue(result, label, section, resultUsed)
-    current = section
-    currentUsed = {}
-    currentChild = null
-    currentChildUsed = {}
-    return section
-  }
-
-  const shouldNestUnderCurrent = (label) => {
-    if (!current) return false
-    const normalized = normalizePlainLabel(label).toLowerCase()
-    return /demographic|psychographic|interest|segment|persona|profile|platform|targeting|hook|scene|visual|script/.test(normalized) &&
-      !/target market|market analysis|core problem|decision trigger|recommendation|next steps|image ad concept|video concept|execution/.test(normalized)
-  }
-
-  lines.forEach((line) => {
-    const trimmed = line.trim()
-    if (!trimmed) return
-
-    const markdownHeading = trimmed.match(/^#{1,4}\s+(.+)$/) || trimmed.match(/^\*\*([^*]+)\*\*:?$/)
-    if (markdownHeading) {
-      ensureSection(normalizePlainLabel(markdownHeading[1]))
-      return
-    }
-
-    const numberedHeading = trimmed.match(/^(?:[-*•]\s*)?(image ad concept|video concept|concept|scene|execution item)\s*(\d+)\s*:?\s*$/i)
-    if (numberedHeading) {
-      ensureSection(`${numberedHeading[1]} ${numberedHeading[2]}`)
-      return
-    }
-
-    const keyValue = trimmed.match(/^[-*•\s]*(?:\d+\.\s*)?([^:\n]{2,80}):\s*(.*)$/)
-    if (keyValue && !/^https?:\/\//i.test(keyValue[1])) {
-      const label = normalizePlainLabel(keyValue[1])
-      const value = keyValue[2].trim()
-      if (!value) {
-        if (shouldNestUnderCurrent(label)) {
-          const child = {}
-          addPlainValue(current, label, child, currentUsed)
-          currentChild = child
-          currentChildUsed = {}
-        } else {
-          ensureSection(label)
-        }
-        return
-      }
-
-      if (!current) ensureSection('Output')
-      const target = currentChild || current
-      const used = currentChild ? currentChildUsed : currentUsed
-      addPlainValue(target, label, value, used)
-      return
-    }
-
-    const bullet = trimmed.match(/^[-*•]\s+(.+)$/)
-    if (bullet) {
-      if (!current) ensureSection('Output')
-      appendPlainItem(currentChild || current, bullet[1])
-      return
-    }
-
-    const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/)
-    if (numbered) {
-      if (!current) ensureSection('Output')
-      appendPlainItem(currentChild || current, `${numbered[1]}. ${numbered[2]}`)
-      return
-    }
-
-    if (!current) ensureSection('Output')
-    appendPlainContent(currentChild || current, trimmed)
-  })
-
-  return Object.keys(result).length ? result : null
-}
-
-function hasRenderableValue(value) {
-  if (value === null || value === undefined) return false
-  if (typeof value === 'string') return value.trim().length > 0
-  if (typeof value === 'number' || typeof value === 'boolean') return true
-  if (Array.isArray(value)) return value.some(item => hasRenderableValue(item))
-  if (typeof value === 'object') {
-    return Object.entries(value)
-      .filter(([key]) => !isTechnicalKey(key))
-      .some(([, item]) => hasRenderableValue(item))
-  }
-  return false
-}
-
-function RawOutputText({ content, text }) {
-  const raw = String(text ?? content ?? '')
-  if (!raw.trim()) {
-    return <p style={{ margin: 0, color: 'var(--text-3)', fontSize: 13 }}>No output.</p>
-  }
-
-  return (
-    <pre style={{
-      margin: 0,
-      color: 'var(--text-2)',
-      fontFamily: 'var(--font-body)',
-      fontSize: 13,
-      lineHeight: 1.7,
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-      overflow: 'visible',
-    }}>
-      {raw}
-    </pre>
-  )
-}
-
-function EmptyAgentOutput({ children = 'No output.' }) {
-  return (
-    <p style={{
-      margin: 0,
-      color: 'var(--text-3)',
-      fontSize: 13,
-      lineHeight: 1.7,
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    }}>
-      {children}
-    </p>
-  )
-}
-
-function SectionPill({ children, agentKey = 'rana', warning = false }) {
-  const agent = AGENTS[agentKey] || AGENTS.rana
-  return (
-    <div style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      alignSelf: 'flex-start',
-      maxWidth: '100%',
-      padding: '5px 12px',
-      borderRadius: 999,
-      background: warning ? 'rgba(255,200,100,0.10)' : `${agent.color}14`,
-      border: warning ? '1px solid rgba(255,200,100,0.28)' : `1px solid ${agent.color}2f`,
-      color: warning ? '#ffc864' : agent.color,
-      fontSize: 11,
-      lineHeight: 1.35,
-      fontFamily: 'var(--font-mono)',
-      textTransform: 'uppercase',
-      letterSpacing: '0.06em',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    }}>
-      {children}
-    </div>
-  )
-}
-
-function AgentStyledOutput({ data, agentKey = 'rana' }) {
-  const agent = AGENTS[agentKey] || AGENTS.rana
-  const highlight = findHighlightEntry(data)
-  if (!highlight) return <AgentConceptRenderer data={data} agentKey={agentKey} />
-
-  const [highlightKey, highlightValue] = highlight
-  const rest = Object.fromEntries(
-    Object.entries(data).filter(([key]) => key !== highlightKey)
-  )
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <section style={{
-        padding: '16px 18px',
-        background: `${agent.color}12`,
-        border: `1px solid ${agent.color}35`,
-        borderLeft: `3px solid ${agent.color}`,
-        borderRadius: 12,
-      }}>
-        <div style={{ marginBottom: 14 }}>
-          <SectionPill agentKey={agentKey}>{humanizeKey(highlightKey)}</SectionPill>
-        </div>
-        <AgentConceptRenderer data={highlightValue} level={1} sectionKey={highlightKey} agentKey={agentKey} />
-      </section>
-      <AgentConceptRenderer data={rest} agentKey={agentKey} />
-    </div>
-  )
-}
-
-function KeyValueList({ entries, level = 0, agentKey = 'rana' }) {
-  const agent = AGENTS[agentKey] || AGENTS.rana
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {entries.map(([key, value]) => (
-        <div key={key} style={{
-          display: 'flex',
-          gap: 10,
-          alignItems: 'flex-start',
-          padding: '10px 12px',
-          background: 'rgba(255,255,255,0.025)',
-          border: '1px solid rgba(255,255,255,0.06)',
-          borderRadius: 10,
-        }}>
-          <span style={{
-            color: agent.color,
-            fontSize: 13,
-            lineHeight: 1.7,
-            flexShrink: 0,
-            marginTop: 1,
-          }}>
-            -
-          </span>
-          <div style={{ minWidth: 0 }}>
-            <span style={{ color: 'var(--text)', fontSize: 13, fontWeight: 700 }}>
-              {humanizeKey(key)}:
-            </span>
-            {isPrimitiveList(value) ? (
-              <div style={{ marginTop: 7 }}>
-                <AgentConceptRenderer data={value} level={level + 1} sectionKey={key} agentKey={agentKey} />
-              </div>
-            ) : (
-              <span style={{
-                color: 'var(--text-2)',
-                fontSize: 13,
-                lineHeight: 1.7,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}>
-                {' '}{String(value)}
-              </span>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function AgentConceptRenderer({ data, title, level = 0, sectionKey = '', agentKey = 'rana' }) {
-  if (data === null || data === undefined) return null
-  const agent = AGENTS[agentKey] || AGENTS.rana
-
-  const textStyle = {
-    margin: 0,
-    color: level === 0 ? 'var(--text)' : 'var(--text-2)',
-    fontSize: level === 0 ? 14 : 13,
-    lineHeight: 1.75,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-  }
-
-  const renderString = (value) => {
-    const lines = String(value || '').split(/\r?\n/)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {lines.map((line, index) => {
-          const trimmed = line.trim()
-          if (!trimmed) return <div key={index} style={{ height: 8 }} />
-
-          if (/^#{1,4}\s+/.test(trimmed) || /^\*\*[^*]+\*\*:?$/.test(trimmed)) {
-            const text = trimmed.replace(/^#{1,4}\s+/, '').replace(/\*\*/g, '').replace(/:$/, '')
-            return (
-              <div key={index} style={{
-                marginTop: index ? 8 : 0,
-                color: 'var(--text)',
-                fontSize: level === 0 ? 15 : 13,
-                fontWeight: 700,
-                lineHeight: 1.4,
-              }}>
-                {text}
-              </div>
-            )
-          }
-
-          if (/^[-*]\s+/.test(trimmed)) {
-            const text = trimmed.replace(/^[-*]\s+/, '')
-            return (
-              <div key={index} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-                <span style={{ color: 'var(--text-3)', lineHeight: 1.7 }}>-</span>
-                <InlineMarkdown text={text} style={textStyle} />
-              </div>
-            )
-          }
-
-          if (/^\d+\.\s+/.test(trimmed)) {
-            const [, number, text] = trimmed.match(/^(\d+)\.\s+(.*)$/) || []
-            return (
-              <div key={index} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                <span style={{ color: 'var(--text-3)', fontWeight: 700, minWidth: 18, lineHeight: 1.7 }}>{number}.</span>
-                <InlineMarkdown text={text} style={textStyle} />
-              </div>
-            )
-          }
-
-          return (
-            <p key={index} style={textStyle}>
-              <InlineMarkdown text={line} />
-            </p>
-          )
-        })}
-      </div>
-    )
-  }
-
-  if (typeof data === 'string') {
-    const looksLikeJsonDump = /^\s*[\{\[]/.test(data) || /raw_output|_parse_error|"\s*:\s*/.test(data)
-    const cleaned = looksLikeJsonDump ? (cleanInvalidJsonForDisplay(data) || data) : data
-    if (level > 0 && !title) {
-      return (
-        <div style={{
-          padding: '11px 12px',
-          background: 'rgba(0,0,0,0.16)',
-          border: '1px solid rgba(255,255,255,0.055)',
-          borderRadius: 8,
-        }}>
-          {renderString(cleaned)}
-        </div>
-      )
-    }
-    return (
-      <section style={{
-        background: level === 0 ? `${agent.color}10` : 'rgba(255,255,255,0.025)',
-        border: level === 0 ? `1px solid ${agent.color}28` : '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 12,
-        padding: 16,
-      }}>
-        {title && (
-          <div style={{ marginBottom: 14 }}>
-            <SectionPill agentKey={agentKey}>{title}</SectionPill>
-          </div>
-        )}
-        {renderString(cleaned)}
-      </section>
-    )
-  }
-
-  if (typeof data === 'number' || typeof data === 'boolean') {
-    return <p style={textStyle}>{String(data)}</p>
-  }
-
-  if (Array.isArray(data)) {
-    const renderableItems = data.filter(item => hasRenderableValue(item))
-    if (!renderableItems.length) return null
-    const primitives = renderableItems.every(item => item === null || ['string', 'number', 'boolean'].includes(typeof item))
-    if (primitives) {
-      if (isShortPrimitiveList(renderableItems)) {
-        return (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {renderableItems.map((item, index) => (
-              <span key={index} style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                maxWidth: '100%',
-                padding: '5px 10px',
-                borderRadius: 999,
-                background: `${agent.color}14`,
-                border: `1px solid ${agent.color}2f`,
-                color: agent.color,
-                fontSize: 12,
-                lineHeight: 1.4,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}>{String(item)}</span>
-            ))}
-          </div>
-        )
-      }
-      if (isActionKey(sectionKey)) {
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {renderableItems.map((item, index) => (
-              <div key={index} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                <span style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 999,
-                  display: 'grid',
-                  placeItems: 'center',
-                  background: 'rgba(196,168,130,0.12)',
-                  border: `1px solid ${agent.color}36`,
-                  color: agent.color,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  flexShrink: 0,
-                  marginTop: 1,
-                }}>{index + 1}</span>
-                <span style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {String(item)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )
-      }
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {renderableItems.map((item, index) => (
-            <div key={index} style={{
-              display: 'flex',
-              gap: 10,
-              alignItems: 'flex-start',
-              padding: '10px 12px',
-              background: 'rgba(0,0,0,0.14)',
-              border: '1px solid rgba(255,255,255,0.055)',
-              borderRadius: 8,
-            }}>
-              <span style={{ color: agent.color, lineHeight: 1.7, flexShrink: 0 }}>-</span>
-              <span style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {String(item)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )
-    }
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {renderableItems.map((item, index) => (
-          <section key={index} style={{
-            background: level === 0 ? `${agent.color}0d` : 'rgba(255,255,255,0.025)',
-            border: level === 0 ? `1px solid ${agent.color}28` : '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 12,
-            padding: 16,
-          }}>
-            <div style={{ marginBottom: 14 }}>
-              <SectionPill agentKey={agentKey}>
-                {getAgentItemLabel(agentKey, sectionKey)} {index + 1}
-              </SectionPill>
-            </div>
-            <AgentConceptRenderer data={item} level={level + 1} sectionKey={sectionKey} agentKey={agentKey} />
-          </section>
-        ))}
-      </div>
-    )
-  }
-
-  if (typeof data === 'object') {
-    const entries = Object.entries(data).filter(([key, value]) => !isTechnicalKey(key) && hasRenderableValue(value))
-    if (!entries.length) return null
-    if (level > 0 && isFlatObject(data)) {
-      return <KeyValueList entries={entries} level={level} agentKey={agentKey} />
-    }
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {entries.map(([key, value]) => {
-          const isNested = typeof value === 'object' && value !== null
-          const warning = isWarningKey(key)
-          const action = isActionKey(key)
-          return (
-            <section key={key} style={{
-              background: warning
-                ? 'rgba(255,200,100,0.06)'
-                : action
-                  ? `${agent.color}0d`
-                  : level === 0 ? 'var(--bg4)' : 'rgba(255,255,255,0.025)',
-              border: warning
-                ? '1px solid rgba(255,200,100,0.18)'
-                : action
-                  ? `1px solid ${agent.color}25`
-                  : '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 12,
-              padding: 16,
-            }}>
-              <div style={{ marginBottom: 14 }}>
-                <SectionPill agentKey={agentKey} warning={warning}>
-                  {humanizeKey(key)}
-                </SectionPill>
-              </div>
-              {isNested ? (
-                <AgentConceptRenderer data={value} level={level + 1} sectionKey={key} agentKey={agentKey} />
-              ) : (
-                <AgentConceptRenderer data={value} level={level + 1} sectionKey={key} agentKey={agentKey} />
-              )}
-            </section>
-          )
-        })}
-      </div>
-    )
-  }
-
   return null
 }
 
 // Agent config.
 const AGENTS = {
-  rana: { name: 'Rana', role: 'Supervisor', outputTitle: 'Supervisor / Final Decision', color: '#c4a882', icon: '◆' },
-  hara: { name: 'Hara', role: 'Research', outputTitle: 'Research Output', color: '#82c4a0', icon: '◎' },
-  bombom: { name: 'Bombom', role: 'Image Ads (10)', outputTitle: 'Image Ads Output (10 Concepts)', color: '#c48282', icon: '▣' },
-  luna: { name: 'Luna', role: 'Video Concept', outputTitle: 'Video Concept Output', color: '#8299c4', icon: '◐' },
-  hagen: { name: 'Hagen', role: 'Execution', outputTitle: 'Execution Output', color: '#c4b082', icon: '▷' },
+  rana: { name: 'Rana', role: 'Supervisor', color: '#c4a882', icon: '◆' },
+  hara: { name: 'Hara', role: 'Research', color: '#82c4a0', icon: '◎' },
+  bombom: { name: 'Bombom', role: 'Image Ads', color: '#c48282', icon: '▣' },
+  luna: { name: 'Luna', role: 'Video Concept', color: '#8299c4', icon: '◐' },
+  hagen: { name: 'Hagen', role: 'Execution', color: '#c4b082', icon: '▷' },
 }
 
 const PROVIDER_LABELS = {
@@ -1059,88 +392,659 @@ function StepTracker({ steps, currentStep, completed }) {
 
 function OutputCard({ agentKey, content, title }) {
   const [expanded, setExpanded] = useState(false)
+  const [showAllConcepts, setShowAllConcepts] = useState(false)
   const a = AGENTS[agentKey]
-  const rawContent = String(content || '')
-  const isJsonFirstAgent = agentKey === 'hara' || agentKey === 'rana'
-  const cleanedContent = typeof content === 'string' && isJsonFirstAgent ? cleanRawJsonText(rawContent) : rawContent
-  const parsed = typeof content === 'string'
-    ? (tryParseJson(rawContent) || (isJsonFirstAgent ? tryParseJson(cleanedContent) : null))
-    : content && typeof content === 'object'
-      ? content
-      : null
+  const parsed = tryParseJson(content)
 
-  const renderSafeBody = () => {
-    const plainReport = parsePlainTextReport(rawContent)
-    if (!parsed && plainReport && hasRenderableValue(plainReport)) {
-      return <AgentStyledOutput data={plainReport} agentKey={agentKey} />
-    }
+  const renderParsedBody = () => {
+    if (!parsed) return null
 
-    if (parsed && typeof parsed === 'object' && parsed._status === 'partial_or_invalid_json' && parsed.raw_output) {
-      const rawOutput = String(parsed.raw_output || '')
-      const restored = tryParseJson(rawOutput) || tryParseJson(cleanRawJsonText(rawOutput))
-      if (restored && hasRenderableValue(restored)) {
-        return <AgentStyledOutput data={restored} agentKey={agentKey} />
-      }
-      return <RawOutputText text={rawOutput || rawContent} />
-    }
+    if (agentKey === 'hara') {
+      const tm = parsed.target_market || {}
+      const cp = parsed.core_problem || {}
+      const dt = parsed.decision_trigger || {}
+      const faq = parsed.faq || []
+      const objections = parsed.objection || []
+      const hasHaraData = (
+        tm.demographics ||
+        tm.psychographics ||
+        tm.fb_interest_targeting?.length ||
+        cp.main_pain_point ||
+        dt.trigger ||
+        faq.length ||
+        objections.length ||
+        parsed.ad_insight
+      )
 
-    if (parsed && hasRenderableValue(parsed)) {
-      return <AgentStyledOutput data={parsed} agentKey={agentKey} />
-    }
+      if (!hasHaraData) return <SummaryView data={parsed} />
 
-    if (isJsonFirstAgent && parsed) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <EmptyAgentOutput>No meaningful output available. Raw response was empty or incomplete.</EmptyAgentOutput>
+
+          {/* Target Market */}
+          {(tm.demographics || tm.psychographics || tm.fb_interest_targeting?.length) && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target Market</div>
+              {tm.demographics && (
+                <div style={{ marginBottom: 8 }}>
+                  <strong style={{ fontSize: 13, color: 'var(--text)' }}>Demographics:</strong>
+                  {typeof tm.demographics === 'string' ? (
+                    <p style={{ margin: '4px 0', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{tm.demographics}</p>
+                  ) : (
+                    <div style={{ marginTop: 4 }}><SummaryView data={tm.demographics} /></div>
+                  )}
+                </div>
+              )}
+              {tm.psychographics && (
+                <div style={{ marginBottom: 8 }}>
+                  <strong style={{ fontSize: 13, color: 'var(--text)' }}>Psychographics:</strong>
+                  {typeof tm.psychographics === 'string' ? (
+                    <p style={{ margin: '4px 0', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{tm.psychographics}</p>
+                  ) : (
+                    <div style={{ marginTop: 4 }}><SummaryView data={tm.psychographics} /></div>
+                  )}
+                </div>
+              )}
+              {tm.fb_interest_targeting?.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                  {tm.fb_interest_targeting.map((t, i) => (
+                    <span key={i} style={{ padding: '3px 10px', borderRadius: 20, background: 'var(--bg)', border: '1px solid var(--border)', fontSize: 11, color: 'var(--text-3)' }}>{t}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Pain Point */}
+          {cp.main_pain_point && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Main Pain Point</div>
+              <div style={{ marginBottom: 8 }}>
+                {typeof cp.main_pain_point === 'string' ? (
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{cp.main_pain_point}</p>
+                ) : (
+                  <SummaryView data={cp.main_pain_point} />
+                )}
+              </div>
+              {cp.problem_logic && (
+                <div>
+                  {typeof cp.problem_logic === 'string' ? (
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{cp.problem_logic}</p>
+                  ) : (
+                    <SummaryView data={cp.problem_logic} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Decision Trigger */}
+          {dt.trigger && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Purchase Decision Trigger</div>
+              <div style={{ marginBottom: 8 }}>
+                {typeof dt.trigger === 'string' ? (
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{dt.trigger}</p>
+                ) : (
+                  <SummaryView data={dt.trigger} />
+                )}
+              </div>
+              {dt.penjelasan && (
+                <div>
+                  {typeof dt.penjelasan === 'string' ? (
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{dt.penjelasan}</p>
+                  ) : (
+                    <SummaryView data={dt.penjelasan} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* FAQ */}
+          {faq.length > 0 && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>FAQ</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {faq.map((f, i) => (
+                  <div key={i}>
+                    <div style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 13, color: 'var(--text)' }}>Q:</strong>
+                      {typeof f.question === 'string' ? (
+                        <span style={{ marginLeft: 4, fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{f.question}</span>
+                      ) : (
+                        <div style={{ marginLeft: 4 }}><SummaryView data={f.question} /></div>
+                      )}
+                    </div>
+                    <div>
+                      <strong style={{ fontSize: 13, color: 'var(--text)' }}>A:</strong>
+                      {typeof f.answer === 'string' ? (
+                        <span style={{ marginLeft: 4, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{f.answer}</span>
+                      ) : (
+                        <div style={{ marginLeft: 4 }}><SummaryView data={f.answer} /></div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Objection Handling */}
+          {objections.length > 0 && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Objection Handling</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {objections.map((o, i) => (
+                  <div key={i}>
+                    <div style={{ marginBottom: 4 }}>
+                      <strong style={{ fontSize: 13, color: 'var(--text)' }}>⚡</strong>
+                      {typeof o.objection === 'string' ? (
+                        <span style={{ marginLeft: 4, fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{o.objection}</span>
+                      ) : (
+                        <div style={{ marginLeft: 4 }}><SummaryView data={o.objection} /></div>
+                      )}
+                    </div>
+                    <div>
+                      {typeof o.handling === 'string' ? (
+                        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{o.handling}</p>
+                      ) : (
+                        <SummaryView data={o.handling} />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Insight */}
+          {parsed.ad_insight && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Insight for Ads</div>
+              {typeof parsed.ad_insight === 'string' ? (
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.ad_insight}</p>
+              ) : (
+                <SummaryView data={parsed.ad_insight} />
+              )}
+            </div>
+          )}
         </div>
       )
     }
 
-    return <RawOutputText text={rawContent} />
+    if (agentKey === 'bombom') {
+      const concepts = Array.isArray(parsed.ad_concepts) ? parsed.ad_concepts : []
+      const visibleConcepts = showAllConcepts ? concepts : concepts.slice(0, 3)
+      if (concepts.length === 0) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {visibleConcepts.map((item, index) => (
+            <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Concept {index + 1}</div>
+              {item.hook && (
+                <div style={{ marginBottom: 8 }}>
+                  {typeof item.hook === 'string' ? (
+                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--bombom)' }}>{item.hook}</div>
+                  ) : (
+                    <SummaryView data={item.hook} />
+                  )}
+                </div>
+              )}
+              {item.visual_idea && (
+                <div style={{ marginBottom: 10 }}>
+                  {typeof item.visual_idea === 'string' ? (
+                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{item.visual_idea}</div>
+                  ) : (
+                    <SummaryView data={item.visual_idea} />
+                  )}
+                </div>
+              )}
+              {item.primary_text && (
+                <div style={{ marginBottom: 10 }}>
+                  {typeof item.primary_text === 'string' ? (
+                    <div style={{ fontSize: 13, color: 'var(--text)' }}>{item.primary_text}</div>
+                  ) : (
+                    <SummaryView data={item.primary_text} />
+                  )}
+                </div>
+              )}
+              {item.headline && (
+                <div style={{ marginTop: 10 }}>
+                  {typeof item.headline === 'string' ? (
+                    <span style={{ display: 'inline-flex', padding: '4px 10px', borderRadius: 999, background: 'rgba(196,130,130,0.12)', color: 'var(--bombom)', fontSize: 12, fontWeight: 600 }}>
+                      {item.headline}
+                    </span>
+                  ) : (
+                    <SummaryView data={item.headline} />
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+          {concepts.length > 3 && (
+            <button onClick={() => setShowAllConcepts(active => !active)} style={{
+              alignSelf: 'flex-start', padding: '10px 14px', background: 'none', border: '1px solid var(--border)', borderRadius: 10,
+              color: 'var(--text-2)', cursor: 'pointer', fontSize: 12
+            }}>
+              {showAllConcepts ? `Hide some concepts` : `View all ${concepts.length} concepts`}
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    if (agentKey === 'luna') {
+      const videos = Array.isArray(parsed.video_concepts) ? parsed.video_concepts : []
+      if (videos.length === 0) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {videos.map((item, index) => {
+            const hook = item.hook_scene || {}
+            const bodyScenes = Array.isArray(item.body_scenes) ? item.body_scenes : []
+            const kp = item.production_requirements || {}
+            return (
+              <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Concept {item.nomor || index + 1}</div>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>{item.real_shoot ? 'Real Shoot' : 'Illustration'}</span>
+                </div>
+                {item.angle_konten && (
+                  <div style={{ marginBottom: 12 }}>
+                    {typeof item.angle_konten === 'string' ? (
+                      <p style={{ margin: 0, fontSize: 13, color: 'var(--luna)', fontWeight: 600 }}>{item.angle_konten}</p>
+                    ) : (
+                      <SummaryView data={item.angle_konten} />
+                    )}
+                  </div>
+                )}
+
+                {/* Hook scene */}
+                {hook.description && (
+                  <div style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', marginBottom: 4 }}>Hook ({hook.duration || '0-3 seconds'})</div>
+                    {typeof hook.description === 'string' ? (
+                      <p style={{ margin: '0 0 4px', fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{hook.description}</p>
+                    ) : (
+                      <div style={{ marginBottom: 4 }}><SummaryView data={hook.description} /></div>
+                    )}
+                    {hook.dialogue_or_text && (
+                      <div>
+                        {typeof hook.dialogue_or_text === 'string' ? (
+                          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>&quot;{hook.dialogue_or_text}&quot;</p>
+                        ) : (
+                          <SummaryView data={hook.dialogue_or_text} />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Body scenes */}
+                {bodyScenes.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                    {bodyScenes.map((scene, sceneIndex) => (
+                      <div key={sceneIndex} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                        <strong style={{ color: 'var(--text-3)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+                          {typeof scene.scene === 'string' ? scene.scene : JSON.stringify(scene.scene)} ({typeof scene.duration === 'string' ? scene.duration : JSON.stringify(scene.duration)})
+                        </strong>
+                        <br />
+                        {typeof scene.scene_text === 'string' ? scene.scene_text : <SummaryView data={scene.scene_text} />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {(kp.talent || kp.location || kp.estimated_total_duration) && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    {kp.talent && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>
+                        🎭 {typeof kp.talent === 'string' ? kp.talent : JSON.stringify(kp.talent)}
+                      </span>
+                    )}
+                    {kp.location && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>
+                        📍 {typeof kp.location === 'string' ? kp.location : JSON.stringify(kp.location)}
+                      </span>
+                    )}
+                    {kp.estimated_total_duration && (
+                      <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-3)' }}>
+                        ⏱ {typeof kp.estimated_total_duration === 'string' ? kp.estimated_total_duration : JSON.stringify(kp.estimated_total_duration)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
+
+    if (agentKey === 'rana') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {parsed.user_summary && (
+            <div style={{ padding: '14px 16px', background: 'rgba(196,168,130,0.08)', borderRadius: 8, borderLeft: '3px solid var(--rana)' }}>
+              <div style={{ fontSize: 11, color: 'var(--rana)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Summary</div>
+              {typeof parsed.user_summary === 'string' ? (
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.7 }}>{parsed.user_summary}</p>
+              ) : (
+                <SummaryView data={parsed.user_summary} />
+              )}
+            </div>
+          )}
+
+          {(topImageAds.length > 0 || topVideoConcepts.length > 0) && (
+            <div className="two-col-grid rana-top-grid">
+              {topImageAds.length > 0 && (
+                <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                  <div style={{ fontSize: 10, color: 'var(--bombom)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Top Image Ads</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {topImageAds.map((n, idx) => (
+                      <span key={idx} style={{ background: 'rgba(196,130,130,0.15)', color: 'var(--bombom)', borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 600 }}>#{n}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {topVideoConcepts.length > 0 && (
+                <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                  <div style={{ fontSize: 10, color: 'var(--luna)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Top Video Concepts</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {topVideoConcepts.map((n, idx) => (
+                      <span key={idx} style={{ background: 'rgba(130,153,196,0.15)', color: 'var(--luna)', borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 600 }}>#{n}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {parsed.choice_rationale && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Choice Rationale</div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.choice_rationale}</p>
+            </div>
+          )}
+
+          {humanReview.length > 0 && (
+            <div style={{ background: 'rgba(255,200,100,0.06)', border: '1px solid rgba(255,200,100,0.2)', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: '#ffc864', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>⚠ Needs Human Review</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {humanReview.map((item, i) => (
+                  <div key={i} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>• {item}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {nextSteps.length > 0 && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Next Steps</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {nextSteps.map((step, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                    <span style={{ color: 'var(--rana)', fontWeight: 700, fontSize: 13, marginTop: 1, flexShrink: 0 }}>{i + 1}.</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>{step}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {parsed.status && (
+            <div style={{ background: 'var(--bg4)', border: `1px solid ${parsed.status === 'approved' ? 'rgba(130,196,160,0.3)' : 'rgba(255,200,100,0.3)'}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Validation Status</div>
+              <span style={{
+                display: 'inline-flex', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                background: parsed.status === 'approved' ? 'rgba(130,196,160,0.15)' : 'rgba(255,200,100,0.12)',
+                color: parsed.status === 'approved' ? 'var(--hara)' : '#ffc864',
+                border: `1px solid ${parsed.status === 'approved' ? 'rgba(130,196,160,0.3)' : 'rgba(255,200,100,0.3)'}`,
+              }}>
+                {parsed.status === 'approved' ? '✓ Approved' : '⚠ Revision Needed'}
+              </span>
+            </div>
+          )}
+          {parsed.assessment && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Assessment</div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.assessment}</p>
+            </div>
+          )}
+          {parsed.key_insight_for_creative_team && (
+            <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--rana)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Key Insight for Creative Team</div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.key_insight_for_creative_team}</p>
+            </div>
+          )}
+
+        </div>
+      )
+    }
+
+    if (agentKey === 'hagen') {
+      const scenes = Array.isArray(parsed.script_breakdown) ? parsed.script_breakdown : []
+      const checklist = Array.isArray(parsed.production_checklist) ? parsed.production_checklist : []
+      if (!scenes.length && !checklist.length) return <SummaryView data={parsed} />
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {scenes.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Script breakdown</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {scenes.map((scene, index) => (
+                  <div key={index} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 24, height: 24, borderRadius: '50%', background: `${a.color}20`, color: a.color, display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700 }}>
+                      {scene.scene_number || index + 1}
+                    </div>
+                    <div style={{ flex: 1, background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 14 }}>
+                      {scene.duration && (
+                        <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>
+                          {typeof scene.duration === 'string' ? scene.duration : JSON.stringify(scene.duration)}
+                        </div>
+                      )}
+                      {scene.visual_direction && (
+                        <div style={{ marginBottom: 8 }}>
+                          {typeof scene.visual_direction === 'string' ? (
+                            <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{scene.visual_direction}</p>
+                          ) : (
+                            <SummaryView data={scene.visual_direction} />
+                          )}
+                        </div>
+                      )}
+                      {scene.dialog && (
+                        <div style={{ marginBottom: 8 }}>
+                          {typeof scene.dialog === 'string' ? (
+                            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7, fontStyle: 'italic' }}>&quot;{scene.dialog}&quot;</p>
+                          ) : (
+                            <SummaryView data={scene.dialog} />
+                          )}
+                        </div>
+                      )}
+                      {scene.on_screen_text && (
+                        <div style={{ marginBottom: 6 }}>
+                          {typeof scene.on_screen_text === 'string' ? (
+                            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)' }}>Text: {scene.on_screen_text}</p>
+                          ) : (
+                            <SummaryView data={scene.on_screen_text} />
+                          )}
+                        </div>
+                      )}
+                      {scene.audio && (
+                        <div style={{ marginBottom: 6 }}>
+                          {typeof scene.audio === 'string' ? (
+                            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)' }}>Audio: {scene.audio}</p>
+                          ) : (
+                            <SummaryView data={scene.audio} />
+                          )}
+                        </div>
+                      )}
+                      {scene.director_notes && (
+                        <div>
+                          {typeof scene.director_notes === 'string' ? (
+                            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>🎬 {scene.director_notes}</p>
+                          ) : (
+                            <SummaryView data={scene.director_notes} />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {checklist.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Production checklist</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {checklist.map((item, index) => (
+                  <div key={index} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <span style={{ width: 18, height: 18, borderRadius: 4, background: 'var(--bg)', border: `1px solid ${a.color}`, display: 'grid', placeItems: 'center', fontSize: 12, color: a.color }}>
+                      ✓
+                    </span>
+                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+                      {typeof item === 'string' ? item : <SummaryView data={item} />}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return <SummaryView data={parsed} />
   }
 
-  const body = expanded ? renderSafeBody() : null
   return (
     <div style={{
       background: 'var(--bg3)', border: `1px solid var(--border)`,
-      borderRadius: 'var(--radius-lg)', overflow: 'visible',
+      borderRadius: 'var(--radius-lg)', overflow: 'hidden',
       borderLeft: `3px solid ${a.color}`,
       animation: 'fadeIn 0.4s ease',
     }}>
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        style={{
-          width: '100%',
-          padding: '16px 18px',
-          border: 'none',
-          background: 'transparent',
-          color: 'var(--text)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-          cursor: 'pointer',
-        }}
-      >
+      <button onClick={() => setExpanded(e => !e)} style={{
+        width: '100%', padding: '14px 18px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)',
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <AgentBadge agentKey={agentKey} />
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-            <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{title || a.outputTitle}</span>
-            <span style={{ fontSize: 11, color: a.color, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>
-              {a.role}
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
-              {expanded ? 'Click to collapse' : 'Click to expand'}
-            </span>
-          </div>
+          <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{title}</span>
         </div>
-        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{expanded ? '▲' : '▼'}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{expanded ? '▲' : '▼'}</span>
       </button>
+
+      {!expanded && !parsed && content && (
+        <div style={{ padding: '0 18px 18px' }}>
+          {(content || '').split('\n').slice(0, 6).map((line, i) => {
+            const trimmed = line.trim()
+            if (!trimmed) return <div key={i} style={{ height: 8 }} />
+            return (
+              <p key={i} style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>
+                {trimmed}
+              </p>
+            )
+          })}
+          {(content || '').split('\n').length > 6 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-3)' }}>…more raw output available if you expand</div>
+          )}
+        </div>
+      )}
 
       {expanded && (
         <div style={{ padding: '0 18px 18px' }}>
-          {body}
+          {parsed ? (
+            <div style={{ marginBottom: 18 }}>
+              {renderParsedBody()}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {(content || '').split('\n').map((line, i) => {
+                const trimmed = line.trim()
+                if (!trimmed) return <div key={i} style={{ height: 8 }} />
+
+                // Render markdown headings.
+                if (/^#{1,3}\s/.test(trimmed) || /^\*\*[^*]+\*\*:?$/.test(trimmed)) {
+                  const text = trimmed.replace(/^#{1,3}\s*/, '').replace(/\*\*/g, '').replace(/:$/, '')
+                  return (
+                    <div key={i} style={{
+                      fontSize: 12, fontWeight: 700, color: a.color,
+                      fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
+                      letterSpacing: '0.06em', marginTop: 14, marginBottom: 4
+                    }}>{text}</div>
+                  )
+                }
+
+                // Render markdown tables.
+                if (/^\|/.test(trimmed) && trimmed.endsWith('|')) {
+                  // Skip separator rows (|---|---|)
+                  if (/^\|[-|\s:]+\|$/.test(trimmed)) return null
+                  const cells = trimmed.split('|').filter(c => c.trim())
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', gap: 0,
+                      background: i % 2 === 0 ? 'var(--bg4)' : 'transparent',
+                      borderRadius: 4, padding: '5px 0'
+                    }}>
+                      {cells.map((cell, ci) => (
+                        <div key={ci} style={{
+                          flex: 1, fontSize: 12, color: 'var(--text-2)',
+                          padding: '0 10px', lineHeight: 1.6,
+                          borderRight: ci < cells.length - 1 ? '1px solid var(--border)' : 'none',
+                          // Bold markdown **text**
+                          fontWeight: /^\*\*.*\*\*$/.test(cell.trim()) ? 600 : 400,
+                        }}>
+                          {cell.trim().replace(/\*\*/g, '')}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
+
+                // Render bullet rows.
+                if (/^[-•]\s/.test(trimmed)) {
+                  const text = trimmed.replace(/^[-•]\s*/, '')
+                  return (
+                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '3px 0' }}>
+                      <span style={{ color: a.color, fontSize: 14, lineHeight: 1.4, flexShrink: 0 }}>•</span>
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
+                    </div>
+                  )
+                }
+
+                // Render numbered rows.
+                if (/^\d+\.\s/.test(trimmed)) {
+                  const [num, ...rest] = trimmed.split(/\.\s/)
+                  const text = rest.join('. ')
+                  return (
+                    <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '3px 0' }}>
+                      <span style={{ color: a.color, fontWeight: 700, fontSize: 12, flexShrink: 0, minWidth: 18 }}>{num}.</span>
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
+                    </div>
+                  )
+                }
+
+                // Render separators.
+                if (/^-{3,}$/.test(trimmed)) {
+                  return <div key={i} style={{ height: 1, background: 'var(--border)', margin: '8px 0' }} />
+                }
+
+                // Render plain paragraphs.
+                return (
+                  <p key={i} style={{ margin: 0 }}>
+                    <InlineMarkdown text={trimmed} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }} />
+                  </p>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1171,7 +1075,7 @@ function JsonViewer({ data, agentColor, depth = 0 }) {
   if (typeof data === 'object' && data !== null) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {Object.entries(data).filter(([key, val]) => !isTechnicalKey(key) && hasRenderableValue(val)).map(([key, val]) => (
+        {Object.entries(data).map(([key, val]) => (
           <div key={key}>
             <div style={{
               fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600,
@@ -1192,72 +1096,125 @@ function JsonViewer({ data, agentColor, depth = 0 }) {
 }
 
 function RanaDecisionCard({ content }) {
-  const rawContent = String(content || '')
-  const parsed = tryParseJson(rawContent) || tryParseJson(cleanRawJsonText(rawContent))
-  const plainReport = parsePlainTextReport(rawContent)
-  const displayData = parsed && typeof parsed === 'object' ? parsed : plainReport
-
-  if (displayData && displayData._status === 'partial_or_invalid_json') {
-    return <OutputCard agentKey="rana" content={content} title="Supervisor / Final Decision" />
-  }
-
-  if (displayData && hasRenderableValue(displayData)) {
-    return (
-      <div style={{
-        background: 'linear-gradient(135deg, #1a1710 0%, #111113 100%)',
-        border: '1px solid rgba(196,168,130,0.25)',
-        borderRadius: 'var(--radius-lg)',
-        padding: 24,
-        animation: 'fadeIn 0.5s ease',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-          <AgentBadge agentKey="rana" size="lg" />
-          <span style={{ color: 'var(--text-2)', fontSize: 13 }}>Supervisor / Final Decision</span>
-        </div>
-        <AgentStyledOutput data={displayData} agentKey="rana" />
-      </div>
-    )
-  }
-
+  const parsed = tryParseJson(content)
   if (!parsed || typeof parsed !== 'object') {
-    return <OutputCard agentKey="rana" content={content} title="Supervisor / Final Decision" />
+    return <OutputCard agentKey="rana" content={content} title="Final decision" />
   }
 
-  if (parsed._status === 'partial_or_invalid_json') {
-    return <OutputCard agentKey="rana" content={content} title="Supervisor / Final Decision" />
-  }
+  const topImageAds = Array.isArray(parsed.top_image_ads) ? parsed.top_image_ads : []
+  const topVideoConcepts = Array.isArray(parsed.top_video_concepts) ? parsed.top_video_concepts : []
+  const humanReview = Array.isArray(parsed.needs_human_review) ? parsed.needs_human_review : []
+  const nextSteps = Array.isArray(parsed.next_steps) ? parsed.next_steps : []
+  const hasDecisionData = (
+    parsed.user_summary ||
+    parsed.choice_rationale ||
+    topImageAds.length ||
+    topVideoConcepts.length ||
+    humanReview.length ||
+    nextSteps.length
+  )
 
-  if (!hasRenderableValue(parsed)) {
-    return (
-      <div style={{
-        background: 'linear-gradient(135deg, #1a1710 0%, #111113 100%)',
-        border: '1px solid rgba(196,168,130,0.25)',
-        borderRadius: 'var(--radius-lg)',
-        padding: 24,
-        animation: 'fadeIn 0.5s ease',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-          <AgentBadge agentKey="rana" size="lg" />
-          <span style={{ color: 'var(--text-2)', fontSize: 13 }}>Supervisor / Final Decision</span>
-        </div>
-        <EmptyAgentOutput>No final decision content available.</EmptyAgentOutput>
-      </div>
-    )
+  if (!hasDecisionData) {
+    return <OutputCard agentKey="rana" content={content} title="Final decision" />
   }
 
   return (
     <div style={{
       background: 'linear-gradient(135deg, #1a1710 0%, #111113 100%)',
       border: '1px solid rgba(196,168,130,0.25)',
-      borderRadius: 'var(--radius-lg)',
-      padding: 24,
+      borderRadius: 'var(--radius-lg)', padding: 24,
       animation: 'fadeIn 0.5s ease',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <AgentBadge agentKey="rana" size="lg" />
-        <span style={{ color: 'var(--text-2)', fontSize: 13 }}>Supervisor / Final Decision</span>
+        <span style={{ color: 'var(--text-2)', fontSize: 13 }}>Final Decision</span>
       </div>
-      <AgentStyledOutput data={parsed} agentKey="rana" />
+
+      {parsed.user_summary && (
+        <div style={{
+          padding: '14px 16px', background: 'rgba(196,168,130,0.08)',
+          borderRadius: 8, borderLeft: '3px solid var(--rana)', marginBottom: 20
+        }}>
+          {typeof parsed.user_summary === 'string' ? (
+            <p style={{ margin: 0, fontSize: 14, color: 'var(--text)', lineHeight: 1.7 }}>
+              {parsed.user_summary}
+            </p>
+          ) : (
+            <SummaryView data={parsed.user_summary} />
+          )}
+        </div>
+      )}
+
+      {(topImageAds.length > 0 || topVideoConcepts.length > 0) && (
+        <div className="two-col-grid rana-top-grid" style={{ marginBottom: 16 }}>
+          {topImageAds.length > 0 && (
+            <div style={{ background: 'var(--bg4)', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 10, color: 'var(--bombom)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+                TOP IMAGE ADS
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {topImageAds.map((n, idx) => (
+                  <span key={idx} style={{
+                    background: 'rgba(196,130,130,0.15)', color: 'var(--bombom)',
+                    borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 500
+                  }}>#{n}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {topVideoConcepts.length > 0 && (
+            <div style={{ background: 'var(--bg4)', borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 10, color: 'var(--luna)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+                TOP VIDEO CONCEPTS
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {topVideoConcepts.map((n, idx) => (
+                  <span key={idx} style={{
+                    background: 'rgba(130,153,196,0.15)', color: 'var(--luna)',
+                    borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 500
+                  }}>#{n}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {humanReview.length > 0 && (
+        <div style={{ background: 'rgba(255,200,100,0.06)', border: '1px solid rgba(255,200,100,0.15)', borderRadius: 8, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: '#ffc864', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>⚠ Needs Human Review</div>
+          {humanReview.map((item, i) => (
+            <div key={i} style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 4 }}>
+              • {typeof item === 'string' ? item : <SummaryView data={item} />}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {parsed.choice_rationale && (
+        <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>Choice Rationale</div>
+          {typeof parsed.choice_rationale === 'string' ? (
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.choice_rationale}</p>
+          ) : (
+            <SummaryView data={parsed.choice_rationale} />
+          )}
+        </div>
+      )}
+
+      {nextSteps.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>NEXT STEPS</div>
+          {nextSteps.map((step, i) => (
+            <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 6, alignItems: 'flex-start' }}>
+              <span style={{ color: 'var(--rana)', fontSize: 12, marginTop: 2 }}>{i + 1}.</span>
+              <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+                {typeof step === 'string' ? step : <SummaryView data={step} />}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1313,74 +1270,15 @@ function FeedbackBar({ sessionId, userId, onDone }) {
   )
 }
 
-function LoginScreen({ onLogin }) {
-  const [name, setName] = useState('')
-  const canLogin = normalizeUserName(name).length >= 1
-
-  const submit = (event) => {
-    event.preventDefault()
-    if (!canLogin) return
-    onLogin(normalizeUserName(name))
-  }
-  return (
-    <div className="app-shell" style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-      <form onSubmit={submit} style={{ width: '100%', maxWidth: 420, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: 24 }}>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-          Local login
-        </div>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 400, marginBottom: 10 }}>
-          Rana
-        </h1>
-        <p style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7, marginBottom: 18 }}>
-          Enter a local username to keep your saved chat history separate on this device.
-        </p>
-        <label htmlFor="localUserName" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>
-          Username
-        </label>
-        <input
-          id="localUserName"
-          value={name}
-          onChange={event => setName(event.target.value)}
-          autoFocus
-          placeholder="e.g. Dzulhaq"
-          style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)', outline: 'none', marginBottom: 14 }}
-        />
-        <button
-          type="submit"
-          disabled={!canLogin}
-          style={{
-            width: '100%', padding: '12px 16px',
-            background: canLogin ? 'rgba(196,168,130,0.15)' : 'var(--bg4)',
-            border: `1px solid ${canLogin ? 'rgba(196,168,130,0.3)' : 'var(--border)'}`,
-            color: canLogin ? 'var(--rana)' : 'var(--text-3)',
-            borderRadius: 'var(--radius)', fontSize: 14, cursor: canLogin ? 'pointer' : 'not-allowed',
-            fontFamily: 'var(--font-body)'
-          }}
-        >
-          Continue
-        </button>
-      </form>
-    </div>
-  )
-}
-
 // Main app.
-function Workspace({ activeUser, onLogout }) {
-  const [sessionId, setSessionId] = useState(() => readUserCurrentSession(activeUser) || getNewSessionId(activeUser))
-  const [history, setHistory] = useState(() => readUserHistory(activeUser))
+export default function App() {
+  const userId = useRef(getUserId()).current
+  const [sessionList, setSessionList] = useState(() => readSessionList(userId))
+  const [sessionId, setSessionId] = useState(() => getSessionId(userId))
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
+  const [showNewChatWarning, setShowNewChatWarning] = useState(false)
   const savedState = useRef(readSessionState(sessionId)).current
   const didHydrateSavedState = useRef(Boolean(savedState))
-  const defaultWizardForm = {
-    namaProduk: '',
-    kategori: '',
-    keunggulan: '',
-    targetAudience: '',
-    painPoint: '',
-    harga: '',
-    platform: [],
-    kompetitor: '',
-    catatan: ''
-  }
   const [productContext, setProductContext] = useState(savedState?.productContext || '')
   const [wizardStep, setWizardStep] = useState(savedState?.wizardStep || 1)
   const [wizardForm, setWizardForm] = useState(savedState?.wizardForm || defaultWizardForm)
@@ -1400,27 +1298,12 @@ function Workspace({ activeUser, onLogout }) {
   const [error, setError] = useState(null)
   const [showFeedback, setShowFeedback] = useState(Boolean(savedState?.result))
   const [additionalInput, setAdditionalInput] = useState(savedState?.additionalInput || '')
-  const [continueCount, setContinueCount] = useState(savedState?.continueCount || 0)
   const [modelAvailability, setModelAvailability] = useState(null)
-  const [historyLimitDialog, setHistoryLimitDialog] = useState(null)
-  const [historyNotice, setHistoryNotice] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
   const fileRef = useRef()
 
-  const getCurrentSessionState = useCallback((overrides = {}) => ({
-    sessionDataVersion: SESSION_DATA_VERSION,
-    productContext,
-    wizardStep,
-    wizardForm,
-    uploadedFiles,
-    runHagen,
-    provider,
-    model,
-    result,
-    additionalInput,
-    continueCount,
-    ...overrides,
-  }), [productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, continueCount])
+  useEffect(() => {
+    setSessionList(readSessionList(userId))
+  }, [userId])
 
   const buildProductContext = () => `
 Product name: ${wizardForm.namaProduk}
@@ -1444,19 +1327,39 @@ Additional notes: ${wizardForm.catatan}
 
   useEffect(() => {
     if (loading) return
-    const state = getCurrentSessionState()
-    writeSessionState(sessionId, state)
-    writeUserCurrentSession(activeUser, sessionId)
-    if (getMeaningfulLength(productContext) > 0 || result) {
-      const update = upsertUserHistory(activeUser, sessionId, state)
-      setHistory(update.history)
-      if (update.removed.length > 0) {
-        setHistoryNotice(`History terlama "${update.removed[0].title}" dihapus karena batas maksimal ${MAX_HISTORY_SESSIONS} history.`)
-      }
-    } else {
-      setHistory(readUserHistory(activeUser))
+    const state = {
+      productContext,
+      wizardStep,
+      wizardForm,
+      uploadedFiles,
+      runHagen,
+      provider,
+      model,
+      result,
+      additionalInput,
     }
-  }, [activeUser, sessionId, productContext, result, loading, getCurrentSessionState])
+    writeSessionState(sessionId, state)
+    setSessionList(prev => {
+      const existing = prev.length ? prev : readSessionList(userId)
+      const current = existing.some(session => session.id === sessionId)
+        ? existing
+        : [{ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() }, ...existing]
+      const updated = current
+        .map(session => session.id === sessionId
+          ? {
+            ...session,
+            title: getSessionTitle(state),
+            updatedAt: Date.now(),
+            hasResult: Boolean(result),
+            usage: getSessionUsage(state),
+          }
+          : session)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, MAX_SESSIONS)
+      writeSessionList(userId, updated)
+      return updated
+    })
+  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading])
 
   useEffect(() => {
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
@@ -1489,12 +1392,80 @@ Additional notes: ${wizardForm.catatan}
     }))
   }
 
+  const loadSessionState = (nextSessionId) => {
+    const nextState = readSessionState(nextSessionId) || getEmptySessionState()
+    didHydrateSavedState.current = true
+    setSessionId(nextSessionId)
+    localStorage.setItem(SESSION_KEY, nextSessionId)
+    setProductContext(nextState.productContext || '')
+    setWizardStep(nextState.wizardStep || 1)
+    setWizardForm(nextState.wizardForm || defaultWizardForm)
+    setUploadedFiles(nextState.uploadedFiles || [])
+    setRunHagen(nextState.runHagen || false)
+    const nextProvider = nextState.provider || DEFAULT_PROVIDER
+    setProvider(nextProvider)
+    setModel(
+      nextState.model && PROVIDER_MODELS[nextProvider]?.includes(nextState.model)
+        ? nextState.model
+        : getDefaultModel(nextProvider)
+    )
+    setResult(nextState.result || null)
+    setAdditionalInput(nextState.additionalInput || '')
+    setShowFeedback(Boolean(nextState.result))
+    setCompletedSteps([])
+    setCurrentStep(null)
+    setError(null)
+    if (window.innerWidth <= 980) setSidebarOpen(false)
+  }
+
+  const createNewSession = async () => {
+    const existing = readSessionList(userId)
+    const nextId = uuidv4()
+    const now = Date.now()
+    const evicted = [...existing, { id: nextId, updatedAt: now }]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(MAX_SESSIONS)
+
+    evicted.forEach(session => {
+      clearSessionState(session.id)
+      clearMemory(session.id, userId).catch(() => { })
+    })
+
+    const nextList = [
+      { id: nextId, title: 'New conversation', createdAt: now, updatedAt: now, hasResult: false, usage: 0 },
+      ...existing.filter(session => !evicted.some(old => old.id === session.id)),
+    ].slice(0, MAX_SESSIONS)
+    writeSessionList(userId, nextList)
+    setSessionList(nextList)
+    writeSessionState(nextId, getEmptySessionState())
+    loadSessionState(nextId)
+  }
+
+  const handleNewSession = async () => {
+    if (loading || newChatDisabled) return
+    const existing = readSessionList(userId)
+    if (existing.length >= MAX_SESSIONS) {
+      setShowNewChatWarning(true)
+      return
+    }
+    await createNewSession()
+  }
+
+  const handleConfirmNewSession = async () => {
+    setShowNewChatWarning(false)
+    await createNewSession()
+  }
+
+  const handleSelectSession = (nextSessionId) => {
+    if (loading || nextSessionId === sessionId) return
+    loadSessionState(nextSessionId)
+  }
+
   const getExportText = () => {
     const parts = []
     if (result?.hara_output) parts.push('Hara - Market research & insight:\n' + result.hara_output)
     if (result?.bombom_output) parts.push('Bombom - Image ad concepts:\n' + result.bombom_output)
     if (result?.luna_output) parts.push('Luna - Video ad concepts:\n' + result.luna_output)
-    if (result?.hagen_output) parts.push('Hagen - Video execution script:\n' + result.hagen_output)
     if (result?.rana_decision) parts.push('Rana - Final decision:\n' + result.rana_decision)
     return parts.join('\n\n')
   }
@@ -1541,80 +1512,26 @@ Additional notes: ${wizardForm.catatan}
   const stepThreeValid = wizardForm.platform.length > 0
   const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
   const canRun = stepOneValid && stepTwoValid && stepThreeValid
-  const canContinue = isMeaningfulText(additionalInput, 8) && continueCount < MAX_CONTINUES_PER_SESSION
-
-  const resetWorkspaceState = useCallback((nextState = {}) => {
-    setProductContext(nextState.productContext || '')
-    setWizardStep(nextState.wizardStep || 1)
-    setWizardForm(nextState.wizardForm || defaultWizardForm)
-    setUploadedFiles(nextState.uploadedFiles || [])
-    setRunHagen(Boolean(nextState.runHagen))
-    const nextProvider = nextState.provider || DEFAULT_PROVIDER
-    setProvider(nextProvider)
-    setModel(
-      nextState.model && PROVIDER_MODELS[nextProvider]?.includes(nextState.model)
-        ? nextState.model
-        : getDefaultModel(nextProvider)
-    )
-    setResult(nextState.result || null)
-    setCompletedSteps([])
-    setCurrentStep(null)
-    setShowFeedback(Boolean(nextState.result))
-    setAdditionalInput(nextState.additionalInput || '')
-    setContinueCount(nextState.continueCount || 0)
-    setError(null)
-  }, [])
-
-  const createNewSession = useCallback((removedSession = null) => {
-    if (loading) return
-    if (removedSession) {
-      removeUserHistorySession(activeUser, removedSession.id)
-      setHistory(readUserHistory(activeUser))
-      setHistoryNotice(`History terlama "${removedSession.title}" dihapus karena batas maksimal ${MAX_HISTORY_SESSIONS} history.`)
-    }
-    const nextId = getNewSessionId(activeUser)
-    setSessionId(nextId)
-    writeUserCurrentSession(activeUser, nextId)
-    resetWorkspaceState()
-  }, [activeUser, loading, resetWorkspaceState])
-
-  const handleNewSession = useCallback(() => {
-    if (loading) return
-    if (history.length >= MAX_HISTORY_SESSIONS) {
-      setHistoryLimitDialog(history[history.length - 1])
-      return
-    }
-    createNewSession()
-  }, [createNewSession, history, loading])
-
-  const handleLoadSession = useCallback((targetSessionId) => {
-    if (loading || targetSessionId === sessionId) return
-    const nextState = readSessionState(targetSessionId) || {}
-    setSessionId(targetSessionId)
-    writeUserCurrentSession(activeUser, targetSessionId)
-    resetWorkspaceState(nextState)
-  }, [activeUser, loading, resetWorkspaceState, sessionId])
-
-  const handleDeleteHistorySession = useCallback(async (targetSessionId) => {
-    if (loading) return
-    await clearMemory(targetSessionId)
-    const nextHistory = removeUserHistorySession(activeUser, targetSessionId)
-    setHistory(nextHistory)
-    if (targetSessionId === sessionId) {
-      createNewSession()
-    }
-  }, [activeUser, createNewSession, loading, sessionId])
+  const canContinue = isMeaningfulText(additionalInput, 8)
+  const activeSessionState = { productContext, wizardForm, uploadedFiles, additionalInput, result }
+  const sessionUsage = getSessionUsage(activeSessionState)
+  const sessionUsagePercent = Math.min(100, Math.round((sessionUsage / MAX_SESSION_CHARS) * 100))
+  const sessionLimitReached = sessionUsage >= MAX_SESSION_CHARS
+  const newChatDisabled = loading || sessionList.some(session => {
+    const state = session.id === sessionId ? activeSessionState : readSessionState(session.id)
+    return isSessionUnusedState(state)
+  })
 
   const handleFileUpload = useCallback(async (files) => {
     for (const file of Array.from(files)) {
       try {
-        const res = await uploadFile(sessionId, file)
+        const res = await uploadFile(sessionId, file, userId)
         setUploadedFiles(prev => [...prev, { name: file.name, preview: res.preview }])
       } catch (error) {
         setError(`Upload failed: ${file.name}. ${error.message}`)
       }
     }
-  }, [sessionId])
+  }, [sessionId, userId])
 
   const stepList = runHagen
     ? [...STEPS, { id: 'hagen', agent: 'hagen', label: 'Hagen is generating the execution script...' }]
@@ -1644,7 +1561,7 @@ Additional notes: ${wizardForm.catatan}
 
     try {
       const [data] = await Promise.all([
-        runAgents({ sessionId, userId: getUserStorageId(activeUser), productContext, runHagen, opts: { provider, model } }),
+        runAgents({ sessionId, userId, productContext, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
@@ -1657,8 +1574,8 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleContinue = async () => {
-    if (continueCount >= MAX_CONTINUES_PER_SESSION) {
-      setError(`This session has reached the ${MAX_CONTINUES_PER_SESSION} revision limit. Start a new session to keep the chat history clear.`)
+    if (sessionLimitReached) {
+      setError('This session is already too long. Start a new conversation from the sidebar so the agents have a cleaner context and quota lasts longer.')
       return
     }
     if (!canContinue || !productContext.trim()) {
@@ -1673,13 +1590,12 @@ Additional notes: ${wizardForm.catatan}
     try {
       const note = additionalInput.trim()
       const [data] = await Promise.all([
-        continueSession({ sessionId, userId: getUserStorageId(activeUser), productContext, additionalInput: note, runHagen, opts: { provider, model } }),
+        continueSession({ sessionId, userId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
       setAdditionalInput('')
       setProductContext(prev => `${prev.trim()}\n\nAdditional input:\n${note}`)
-      setContinueCount(prev => prev + 1)
       setShowFeedback(true)
     } catch (e) {
       setError(e.message)
@@ -1689,9 +1605,8 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleClear = async () => {
-    await clearMemory(sessionId)
+    await clearMemory(sessionId, userId)
     clearSessionState(sessionId)
-    setHistory(removeUserHistorySession(activeUser, sessionId))
     setResult(null)
     setCompletedSteps([])
     setCurrentStep(null)
@@ -1714,165 +1629,167 @@ Additional notes: ${wizardForm.catatan}
     setModel(getDefaultModel(DEFAULT_PROVIDER))
     setShowFeedback(false)
     setAdditionalInput('')
-    setContinueCount(0)
     setError(null)
+    setSessionList(prev => {
+      const updated = prev.map(session => session.id === sessionId
+        ? { ...session, title: 'New conversation', hasResult: false, usage: 0, updatedAt: Date.now() }
+        : session)
+      writeSessionList(userId, updated)
+      return updated
+    })
   }
 
   return (
     <div className="app-shell" style={{ minHeight: '100vh', background: 'var(--bg)' }}>
-      {historyLimitDialog && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 500,
-          background: 'rgba(0,0,0,0.66)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 20,
-        }}>
-          <div style={{
-            width: '100%', maxWidth: 420,
-            background: 'var(--bg3)', border: '1px solid var(--border-bright)',
-            borderRadius: 'var(--radius-lg)', padding: 20,
-            boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
-          }}>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-              History limit
+      {/* Header */}
+      <header className="app-header" style={{
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'rgba(10,10,11,0.9)',
+        backdropFilter: 'blur(12px)',
+        gap: 12,
+      }}>
+        <div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 400, letterSpacing: '-0.01em' }}>
+            Rana <span style={{ color: 'var(--text-3)', fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 400 }}>marketing system</span>
+          </h1>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(open => !open)}
+            className="icon-btn"
+            aria-label={sidebarOpen ? 'Close chat history' : 'Open chat history'}
+            title={sidebarOpen ? 'Close history' : 'Open history'}
+          >
+            {sidebarOpen ? 'Close' : 'Menu'}
+          </button>
+          <button
+            type="button"
+            onClick={handleNewSession}
+            disabled={newChatDisabled}
+            className="header-action-btn"
+            title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+          >
+            New chat
+          </button>
+          {Object.entries(AGENTS).map(([key, a]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: a.color }} />
             </div>
-            <div style={{ color: 'var(--text)', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-              Maksimal {MAX_HISTORY_SESSIONS} history
-            </div>
-            <p style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.7, marginBottom: 16 }}>
-              Kalau membuat chat baru, history paling lama akan dihapus: "{historyLimitDialog.title}".
+          ))}
+          <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
+            5 agents
+          </span>
+          {result && (
+            <button onClick={handleClear} style={{
+              marginLeft: 8, padding: '5px 12px', background: 'none',
+              border: '1px solid var(--border)', color: 'var(--text-3)',
+              borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-body)'
+            }}>
+              Reset session
+            </button>
+          )}
+        </div>
+      </header>
+
+      {sidebarOpen && <div className="history-backdrop" onClick={() => setSidebarOpen(false)} />}
+
+      {showNewChatWarning && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowNewChatWarning(false)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-chat-warning-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">History limit</div>
+            <h2 id="new-chat-warning-title">Buat chat baru?</h2>
+            <p>
+              History chat sudah mencapai batas 3 sesi. Jika membuat chat ke-4, sesi paling lama akan terhapus otomatis.
             </p>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <div className="confirm-modal-actions">
               <button
                 type="button"
-                onClick={() => setHistoryLimitDialog(null)}
-                style={{ padding: '10px 14px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-2)', borderRadius: 8, cursor: 'pointer', fontFamily: 'var(--font-body)' }}
+                className="confirm-modal-secondary"
+                onClick={() => setShowNewChatWarning(false)}
               >
-                Cancel
+                Batal
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const oldest = historyLimitDialog
-                  setHistoryLimitDialog(null)
-                  createNewSession(oldest)
-                }}
-                style={{ padding: '10px 14px', background: 'rgba(196,168,130,0.15)', border: '1px solid rgba(196,168,130,0.35)', color: 'var(--rana)', borderRadius: 8, cursor: 'pointer', fontFamily: 'var(--font-body)' }}
+                className="confirm-modal-primary"
+                onClick={handleConfirmNewSession}
               >
-                Create chat
+                Lanjutkan
               </button>
             </div>
           </div>
         </div>
       )}
-      {historyNotice && (
-        <div style={{
-          position: 'fixed', right: 18, bottom: 18, zIndex: 450,
-          maxWidth: 360, padding: '12px 14px',
-          background: 'var(--bg3)', border: '1px solid var(--border-bright)',
-          borderRadius: 10, color: 'var(--text-2)', fontSize: 13,
-          boxShadow: '0 16px 40px rgba(0,0,0,0.28)',
-        }}>
-          <div style={{ marginBottom: 8 }}>{historyNotice}</div>
-          <button
-            type="button"
-            onClick={() => setHistoryNotice('')}
-            style={{ background: 'transparent', border: 0, color: 'var(--rana)', cursor: 'pointer', fontFamily: 'var(--font-body)', padding: 0 }}
-          >
-            OK
-          </button>
-        </div>
-      )}
-      <button
-        type="button"
-        className={`sidebar-toggle ${sidebarOpen ? 'is-open' : 'is-closed'}`}
-        onClick={() => setSidebarOpen(open => !open)}
-        aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-        aria-expanded={sidebarOpen}
-      >
-        {sidebarOpen ? '<' : '>'}
-      </button>
 
-      <div className={`app-page ${sidebarOpen ? '' : 'sidebar-collapsed'}`} style={{ width: '100%' }}>
+      <aside className={`history-sidebar ${sidebarOpen ? 'open' : ''}`} aria-label="Chat history">
+        <div className="history-sidebar-head">
+          <div>
+            <div className="history-eyebrow">History</div>
+            <div className="history-title">Conversations</div>
+          </div>
+          <button type="button" onClick={() => setSidebarOpen(false)} className="icon-btn" aria-label="Close history">Close</button>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleNewSession}
+          disabled={newChatDisabled}
+          className="new-chat-btn"
+          title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+        >
+          + New chat
+        </button>
+
+        <div className="history-list">
+          {sessionList.map(session => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => handleSelectSession(session.id)}
+              className={`history-item ${session.id === sessionId ? 'active' : ''}`}
+              disabled={loading}
+            >
+              <span className="history-item-title">{session.title || 'New conversation'}</span>
+              <span className="history-item-meta">
+                {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="history-note">
+          Maksimal 3 sesi per akun. Saat membuat sesi ke-4, sesi paling lama dihapus otomatis.
+        </div>
+      </aside>
+
+      <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`} style={{ maxWidth: 1280, margin: '0 auto', width: '100%' }}>
         {/* LEFT PANEL */}
-        <div className="app-left-panel" aria-hidden={!sidebarOpen}>
-
-          {/* Sidebar */}
-          <aside className="chat-sidebar">
-            <div className="sidebar-main">
-              <div className="sidebar-brand">
-                <div className="sidebar-logo">R</div>
-                <div>
-                  <div className="sidebar-title">Rana</div>
-                  <div className="sidebar-subtitle">Marketing System</div>
-                </div>
-                <button
-                  type="button"
-                  className="sidebar-close"
-                  onClick={() => setSidebarOpen(false)}
-                  aria-label="Close sidebar"
-                >
-                  x
-                </button>
-              </div>
-
-              <button className="sidebar-new-chat" onClick={handleNewSession} disabled={loading}>
-                <span className="sidebar-new-icon">+</span>
-                <span>New chat</span>
-              </button>
-
-              <div className="sidebar-section-label">Recents</div>
-              <div className="sidebar-history-list">
-                {history.length === 0 && (
-                  <div className="sidebar-empty">No saved chats yet.</div>
-                )}
-                {history.map(item => {
-                  const active = item.id === sessionId
-                  return (
-                    <div key={item.id} className={`sidebar-history-item ${active ? 'active' : ''}`}>
-                      <button
-                        type="button"
-                        onClick={() => handleLoadSession(item.id)}
-                        disabled={loading}
-                        className="sidebar-history-button"
-                      >
-                        <span className="sidebar-history-title">{item.title}</span>
-                        <span className="sidebar-history-summary">{item.summary}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteHistorySession(item.id)}
-                        disabled={loading}
-                        title="Delete session"
-                        className="sidebar-delete"
-                      >
-                        x
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
+        <div className="app-left-panel">
+          <div className={`session-meter ${sessionUsage >= SESSION_WARNING_CHARS ? 'warning' : ''}`}>
+            <div className="session-meter-row">
+              <span>Session context</span>
+              <span>{sessionUsagePercent}%</span>
             </div>
-
-            <div className="sidebar-account">
-              <div className="sidebar-avatar">{activeUser.slice(0, 2).toUpperCase()}</div>
-              <div className="sidebar-account-text">
-                <div className="sidebar-account-name">{activeUser}</div>
-                <div className="sidebar-account-meta">{history.length}/{MAX_HISTORY_SESSIONS} histories</div>
-              </div>
-              {result && (
-                <button className="sidebar-account-action" onClick={handleClear} title="Reset session">
-                  reset
-                </button>
-              )}
-              <button className="sidebar-account-action" onClick={onLogout} disabled={loading}>
-                out
-              </button>
+            <div className="session-meter-track">
+              <div className="session-meter-fill" style={{ width: `${sessionUsagePercent}%` }} />
             </div>
-          </aside>
-        </div>
+            <p>
+              {sessionLimitReached
+                ? 'Session limit reached. Start a new chat for cleaner results.'
+                : sessionUsage >= SESSION_WARNING_CHARS
+                  ? 'This chat is getting long. A new chat will protect quality and quota.'
+                  : 'Keep each session focused for better agent output.'}
+            </p>
+          </div>
 
-        <div className="app-work-panel">
           {/* Product input */}
           <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-end', marginBottom: 18 }}>
@@ -2292,38 +2209,13 @@ Additional notes: ${wizardForm.catatan}
               <div style={{
                 padding: '16px 20px', background: 'rgba(130,196,160,0.06)',
                 border: '1px solid rgba(130,196,160,0.2)', borderRadius: 'var(--radius)',
-                display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                display: 'flex', alignItems: 'center', gap: 10,
                 animation: 'fadeIn 0.3s ease',
               }}>
                 <span style={{ color: 'var(--hara)', fontSize: 16 }}>✓</span>
                 <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
                   All agents completed - {new Date().toLocaleTimeString('id-ID')}
                 </span>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
-                  {[
-                    ['rana', result.rana_decision],
-                    ['hara', result.hara_output],
-                    ['bombom', result.bombom_output],
-                    ['luna', result.luna_output],
-                    ['hagen', result.hagen_output],
-                  ].filter(([, output]) => Boolean(output)).map(([agentKey]) => {
-                    const agent = AGENTS[agentKey]
-                    return (
-                      <span key={agentKey} style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6,
-                        padding: '5px 9px', borderRadius: 8,
-                        background: `${agent.color}16`,
-                        border: `1px solid ${agent.color}38`,
-                        color: agent.color,
-                        fontSize: 12,
-                        fontWeight: 600,
-                      }}>
-                        <span>{agent.icon}</span>
-                        <span>{agent.name}</span>
-                      </span>
-                    )
-                  })}
-                </div>
               </div>
 
               {!(result.rana_decision || result.hara_output || result.bombom_output || result.luna_output || result.hagen_output) && (
@@ -2340,7 +2232,7 @@ Additional notes: ${wizardForm.catatan}
               {/* Rana decision — always first */}
               {result.rana_decision && (
                 <>
-                  <OutputCard agentKey="rana" content={result.rana_decision} title="Supervisor / Final Decision" />
+                  <RanaDecisionCard content={result.rana_decision} />
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
                     <button onClick={handleCopyAll} style={{
                       padding: '10px 16px', background: 'rgba(196,168,130,0.15)', border: '1px solid rgba(196,168,130,0.3)',
@@ -2360,22 +2252,22 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Hara output */}
               {result.hara_output && (
-                <OutputCard agentKey="hara" content={result.hara_output} title="Research Output" />
+                <OutputCard agentKey="hara" content={result.hara_output} title="Market research & insight" />
               )}
 
               {/* Bombom output */}
               {result.bombom_output && (
-                <OutputCard agentKey="bombom" content={result.bombom_output} title="Image Ads Output (10 Concepts)" />
+                <OutputCard agentKey="bombom" content={result.bombom_output} title="10 image ad concepts" />
               )}
 
               {/* Luna output */}
               {result.luna_output && (
-                <OutputCard agentKey="luna" content={result.luna_output} title="Video Concept Output" />
+                <OutputCard agentKey="luna" content={result.luna_output} title="Video ad concepts" />
               )}
 
               {/* Hagen output (if exists) */}
               {result.hagen_output && (
-                <OutputCard agentKey="hagen" content={result.hagen_output} title="Execution Output" />
+                <OutputCard agentKey="hagen" content={result.hagen_output} title="Video execution script" />
               )}
 
               {/* Additional input */}
@@ -2412,29 +2304,29 @@ Additional notes: ${wizardForm.catatan}
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                    Revision {continueCount}/{MAX_CONTINUES_PER_SESSION}. Rana will keep the same session memory and rerun the agents with this extra context.
+                    Rana will keep the same session memory and rerun the agents with this extra context.
                   </span>
                   <button
                     onClick={handleContinue}
-                    disabled={loading || !canContinue}
+                    disabled={loading || !canContinue || sessionLimitReached}
                     style={{
                       padding: '10px 16px',
-                      background: loading || !canContinue ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
-                      border: `1px solid ${loading || !canContinue ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
-                      color: loading || !canContinue ? 'var(--text-3)' : 'var(--rana)',
+                      background: loading || !canContinue || sessionLimitReached ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
+                      border: `1px solid ${loading || !canContinue || sessionLimitReached ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
+                      color: loading || !canContinue || sessionLimitReached ? 'var(--text-3)' : 'var(--rana)',
                       borderRadius: 8, fontSize: 13,
-                      cursor: loading || !canContinue ? 'not-allowed' : 'pointer',
+                      cursor: loading || !canContinue || sessionLimitReached ? 'not-allowed' : 'pointer',
                       fontFamily: 'var(--font-body)',
                     }}
                   >
-                    {continueCount >= MAX_CONTINUES_PER_SESSION ? 'Revision limit reached' : 'Send additional input'}
+                    Send additional input
                   </button>
                 </div>
               </div>
 
               {/* Feedback */}
               {showFeedback && (
-                <FeedbackBar sessionId={sessionId} userId={getUserStorageId(activeUser)} onDone={() => setShowFeedback(false)} />
+                <FeedbackBar sessionId={sessionId} userId={userId} onDone={() => setShowFeedback(false)} />
               )}
             </>
           )}
@@ -2442,49 +2334,4 @@ Additional notes: ${wizardForm.catatan}
       </div>
     </div>
   )
-}
-
-export default function App() {
-  const [activeUser, setActiveUser] = useState(readActiveUser())
-  const [appKey, setAppKey] = useState(0)
-
-  const handleLogin = (userName) => {
-    const normalized = normalizeUserName(userName)
-    if (!normalized) return
-
-    let nextSessionId = readUserCurrentSession(normalized)
-    if (!nextSessionId) {
-      nextSessionId = getNewSessionId(normalized)
-      writeUserCurrentSession(normalized, nextSessionId)
-      writeSessionState(nextSessionId, {
-        sessionDataVersion: SESSION_DATA_VERSION,
-        productContext: '',
-        wizardStep: 1,
-        wizardForm: null,
-        uploadedFiles: [],
-        runHagen: false,
-        provider: DEFAULT_PROVIDER,
-        model: getDefaultModel(DEFAULT_PROVIDER),
-        result: null,
-        additionalInput: '',
-        continueCount: 0,
-      })
-    }
-
-    writeActiveUser(normalized)
-    setActiveUser(normalized)
-    setAppKey(prev => prev + 1)
-  }
-
-  const handleLogout = () => {
-    clearActiveUser()
-    setActiveUser('')
-    setAppKey(prev => prev + 1)
-  }
-
-  if (!activeUser) {
-    return <LoginScreen onLogin={handleLogin} />
-  }
-
-  return <Workspace key={`${activeUser}:${appKey}`} activeUser={activeUser} onLogout={handleLogout} />
 }

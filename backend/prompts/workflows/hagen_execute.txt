@@ -5,3 +5,11 @@ Rana decision:
 [[RANA_DECISION]]
 
 Create a detailed production script breakdown.
+
+LANGUAGE RULE:
+- Match the language of all user-facing output values to the product context.
+- If the product context is mostly Indonesian, write dialogue, on_screen_text,
+  and director_notes in Indonesian.
+- If the product context is mostly English, write in English.
+- If mixed, use the dominant language. If balanced, default to Indonesian.
+- Keep JSON field names in English exactly as defined in the schema.

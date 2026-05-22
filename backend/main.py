@@ -11,7 +11,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Optional, Annotated
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -264,42 +264,41 @@ async def get_all_availabilities():
             results[provider][model_name] = await check_provider_model_availability(provider, model_name)
     return results
 
-# Memory store.
+# Memory store. The key includes user_id so future Firebase Auth users do not share sessions.
 session_memory: dict[str, list] = {}
-user_learning: dict[str, list[dict]] = {}  # Store cross-session learning per local user.
-rana_learning: list[dict] = []  # Store legacy global feedback.
+rana_learning: list[dict] = []  # Store cross-session feedback.
+MAX_SESSION_MESSAGES = int(os.environ.get("MAX_SESSION_MESSAGES", "14"))
 
 
-def get_memory(session_id: str) -> list:
-    return session_memory.get(session_id, [])
+def memory_key(session_id: str, user_id: Optional[str] = None) -> str:
+    scoped_user = (user_id or "guest").strip() or "guest"
+    return f"{scoped_user}:{session_id}"
 
 
-def save_memory(session_id: str, messages: list):
-    session_memory[session_id] = messages[-MAX_SESSION_MESSAGES:]
+def get_memory(session_id: str, user_id: Optional[str] = None) -> list:
+    return session_memory.get(memory_key(session_id, user_id), [])
 
 
-def get_user_learning(user_id: str) -> list[dict]:
-    return user_learning.get(user_id or "anonymous", [])
+def save_memory(session_id: str, messages: list, user_id: Optional[str] = None):
+    session_memory[memory_key(session_id, user_id)
+                   ] = messages[-MAX_SESSION_MESSAGES:]
 
 
-def save_user_insight(user_id: str, session_id: str, insight: str):
-    cleaned = str(insight or "").strip()
-    if not cleaned:
-        return
-    key = user_id or "anonymous"
-    existing = user_learning.get(key, [])
-    existing.append({
-        "session_id": session_id,
-        "insight": cleaned[:1200],
-        "timestamp": str(asyncio.get_event_loop().time()),
-    })
-    user_learning[key] = existing[-MAX_USER_PROFILE_INSIGHTS:]
+def ensure_session_capacity(session_id: str, user_id: Optional[str] = None, added_messages: int = 0):
+    current_size = len(get_memory(session_id, user_id))
+    if current_size + added_messages >= MAX_SESSION_MESSAGES:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "This conversation is getting too long for one session. "
+                "Start a new conversation so the agents can keep enough context and avoid wasting quota."
+            ),
+        )
 
 
 # Agent state.
 class AgentState(TypedDict):
     session_id: str
-    user_id: str
     product_context: str
     uploaded_files: list[str]
     hara_output: Optional[str]
@@ -351,28 +350,6 @@ ALLOWED_UPLOAD_CONTENT_TYPES = {
 }
 
 
-def env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if not value:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        logger.warning("Invalid %s=%r; using default %s", name, value, default)
-        return default
-
-
-# Output budgets. Keep coordinator steps moderate, but give structured agent
-# outputs enough room so JSON is less likely to be truncated.
-DEFAULT_MAX_TOKENS = env_int("DEFAULT_MAX_TOKENS", 5000)
-AGENT_MAX_TOKENS = env_int("AGENT_MAX_TOKENS", 10000)
-FINAL_MAX_TOKENS = env_int("FINAL_MAX_TOKENS", 6000)
-JSON_REPAIR_MAX_TOKENS = env_int("JSON_REPAIR_MAX_TOKENS", 7000)
-CLAUDE_MAX_CONTINUATIONS = env_int("CLAUDE_MAX_CONTINUATIONS", 1)
-MAX_SESSION_MESSAGES = env_int("MAX_SESSION_MESSAGES", 18)
-MAX_USER_PROFILE_INSIGHTS = env_int("MAX_USER_PROFILE_INSIGHTS", 12)
-
-
 def load_prompt(prompt_name: str) -> str:
     filename = PROMPT_FILES.get(prompt_name)
     if not filename:
@@ -418,29 +395,12 @@ def extract_message_content(message) -> str:
     return str(message)
 
 
-def extract_agent_outputs_from_messages(messages: list) -> dict[str, str]:
-    outputs: dict[str, str] = {}
-    markers = {
-        "hara_output": "[HARA]",
-        "bombom_output": "[BOMBOM]",
-        "luna_output": "[LUNA]",
-        "hagen_output": "[HAGEN]",
-        "rana_decision": "[RANA FINAL]",
-    }
-    for message in messages or []:
-        content = str(extract_message_content(message) or "")
-        for key, marker in markers.items():
-            if marker in content:
-                outputs[key] = content.split(marker, 1)[1].strip()
-    return outputs
-
-
 def call_claude(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-    max_continuations: int = CLAUDE_MAX_CONTINUATIONS,
+    max_tokens: int = 5000,
+    max_continuations: int = 2,
 ) -> str:
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
@@ -489,7 +449,7 @@ def call_gemini(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["gemini"]:
         raise HTTPException(
@@ -503,9 +463,6 @@ def call_gemini(
         url,
         json={
             "contents": [{"parts": [{"text": prompt_text}]}],
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-            },
         },
         timeout=30.0,
     )
@@ -535,7 +492,7 @@ def call_openrouter(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["openrouter"]:
         raise HTTPException(
@@ -583,7 +540,7 @@ def call_openai(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["openai"]:
         raise HTTPException(
@@ -639,7 +596,7 @@ def call_grok(
     system: str,
     user_message: str,
     model: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int = 5000,
 ) -> str:
     if not API_KEYS["grok"]:
         raise HTTPException(
@@ -696,7 +653,7 @@ def call_model(
     model_name: str,
     system: str,
     user_message: str,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int = 5000,
 ) -> str:
     model = get_model(model_name, provider)
     if provider == "anthropic":
@@ -716,7 +673,7 @@ def call_model(
     )
 
 
-def call_claude_stream(system: str, user_message: str, max_tokens: int = DEFAULT_MAX_TOKENS):
+def call_claude_stream(system: str, user_message: str, max_tokens: int = 5000):
     """Stream a Claude response."""
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
@@ -736,53 +693,8 @@ def strip_json_fence(text: str) -> str:
     if not isinstance(text, str):
         return text
     text = text.strip()
-    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\s*```$', '', text)
     return text.strip()
-
-
-def extract_json_candidate(text: str) -> str:
-    """Extract the first balanced JSON object or array from mixed model output."""
-    if not isinstance(text, str):
-        return text
-
-    text = strip_json_fence(text)
-    if is_valid_json(text):
-        return text
-
-    starts = [idx for idx in (text.find("{"), text.find("[")) if idx != -1]
-    if not starts:
-        return text
-
-    start = min(starts)
-    stack = []
-    in_str = False
-    esc = False
-    for idx in range(start, len(text)):
-        ch = text[idx]
-        if esc:
-            esc = False
-            continue
-        if ch == "\\" and in_str:
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch in ("{", "["):
-            stack.append("}" if ch == "{" else "]")
-        elif ch in ("}", "]"):
-            if not stack or stack[-1] != ch:
-                continue
-            stack.pop()
-            if not stack:
-                candidate = text[start:idx + 1].strip()
-                if is_valid_json(candidate):
-                    return candidate
-
-    return text[start:].strip()
 
 
 def is_valid_json(text: str) -> bool:
@@ -791,244 +703,6 @@ def is_valid_json(text: str) -> bool:
         return True
     except Exception:
         return False
-
-
-def has_meaningful_json_value(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (int, float, bool)):
-        return True
-    if isinstance(value, list):
-        return any(has_meaningful_json_value(item) for item in value)
-    if isinstance(value, dict):
-        return any(
-            not str(key).startswith("_")
-            and key != "raw_output"
-            and has_meaningful_json_value(child)
-            for key, child in value.items()
-        )
-    return False
-
-
-def humanize_key(key: str) -> str:
-    labels = {
-        "target_market": "Target Market",
-        "core_problem": "Core Problem",
-        "decision_trigger": "Decision Trigger",
-        "fb_interest_targeting": "FB Interest Targeting",
-        "main_pain_point": "Main Pain Point",
-        "problem_logic": "Problem Logic",
-        "ad_insight": "Ad Insight",
-        "assumptions_used": "Assumptions Used",
-        "clarification_questions": "Clarification Questions",
-        "video_concepts": "Video Concepts",
-        "content_angle": "Content Angle",
-        "angle_konten": "Content Angle",
-        "hook_scene": "Hook Scene",
-        "dialogue_or_text": "Dialogue / On-screen Text",
-        "body_scenes": "Body Scenes",
-        "scene_text": "Scene Text",
-        "production_requirements": "Production Requirements",
-        "estimated_total_duration": "Estimated Total Duration",
-        "top_image_ads": "Top Image Ads",
-        "top_video_concepts": "Top Video Concepts",
-        "choice_rationale": "Choice Rationale",
-        "needs_human_review": "Needs Human Review",
-        "next_steps": "Next Steps",
-        "run_hagen": "Run Hagen",
-        "user_summary": "Summary",
-    }
-    if key in labels:
-        return labels[key]
-    return str(key or "").replace("_", " ").title()
-
-
-def format_value_as_text(value: Any, indent: int = 0) -> list[str]:
-    prefix = "  " * indent
-    if value is None:
-        return []
-    if isinstance(value, (str, int, float, bool)):
-        text = str(value).strip()
-        return [f"{prefix}{text}"] if text else []
-    if isinstance(value, list):
-        lines: list[str] = []
-        for index, item in enumerate(value, start=1):
-            if isinstance(item, dict):
-                title = (
-                    item.get("number")
-                    or item.get("nomor")
-                    or item.get("scene_number")
-                    or index
-                )
-                lines.append(f"{prefix}{index}. Item {title}")
-                lines.extend(format_value_as_text(item, indent + 1))
-            else:
-                item_lines = format_value_as_text(item, indent + 1)
-                if item_lines:
-                    first = item_lines[0].strip()
-                    lines.append(f"{prefix}- {first}")
-                    lines.extend(item_lines[1:])
-        return lines
-    if isinstance(value, dict):
-        lines: list[str] = []
-        for key, child in value.items():
-            if str(key).startswith("_") or key == "raw_output":
-                continue
-            child_lines = format_value_as_text(child, indent + 1)
-            if not child_lines:
-                continue
-            lines.append(f"{prefix}{humanize_key(key)}:")
-            lines.extend(child_lines)
-        return lines
-    return [f"{prefix}{str(value)}"]
-
-
-def parse_agent_json_output(raw_text: Optional[str]) -> Optional[Any]:
-    if raw_text is None:
-        return None
-    if isinstance(raw_text, (dict, list)):
-        return raw_text
-    text = str(raw_text).strip()
-    if not text:
-        return None
-    for candidate in (text, extract_json_candidate(text), repair_truncated_json(text)):
-        try:
-            return json.loads(candidate)
-        except Exception:
-            continue
-    return None
-
-
-def format_hara_output(data: dict[str, Any]) -> str:
-    target_market = data.get("target_market") or {}
-    core_problem = data.get("core_problem") or {}
-    decision_trigger = data.get("decision_trigger") or {}
-    lines = [
-        "## Target Market",
-        f"Demographics: {target_market.get('demographics', '')}",
-        f"Psychographics: {target_market.get('psychographics', '')}",
-    ]
-    interests = target_market.get("fb_interest_targeting") or []
-    if interests:
-        lines.append(f"FB Interest Targeting: {', '.join(map(str, interests))}")
-
-    lines.extend([
-        "",
-        "## Core Problem",
-        f"Main Pain Point: {core_problem.get('main_pain_point', '')}",
-        f"Problem Logic: {core_problem.get('problem_logic', '')}",
-        "",
-        "## Decision Trigger",
-        f"Trigger: {decision_trigger.get('trigger', '')}",
-        f"Explanation: {decision_trigger.get('explanation') or decision_trigger.get('penjelasan', '')}",
-    ])
-
-    faq = data.get("faq") or []
-    if faq:
-        lines.extend(["", "## FAQ"])
-        for index, item in enumerate(faq, start=1):
-            lines.append(f"{index}. Q: {item.get('question', '')}")
-            lines.append(f"   A: {item.get('answer', '')}")
-
-    objections = data.get("objection") or []
-    if objections:
-        lines.extend(["", "## Objection Handling"])
-        for index, item in enumerate(objections, start=1):
-            lines.append(f"{index}. Objection: {item.get('objection', '')}")
-            lines.append(f"   Handling: {item.get('handling', '')}")
-
-    if data.get("ad_insight"):
-        lines.extend(["", "## Ad Insight", str(data["ad_insight"])])
-    if data.get("assumptions_used"):
-        lines.extend(["", "## Assumptions Used"])
-        lines.extend(f"- {item}" for item in data["assumptions_used"])
-    if data.get("clarification_questions"):
-        lines.extend(["", "## Clarification Questions"])
-        lines.extend(f"- {item}" for item in data["clarification_questions"])
-
-    return "\n".join(line for line in lines if line is not None).strip()
-
-
-def format_luna_output(data: dict[str, Any]) -> str:
-    concepts = data.get("video_concepts") or []
-    blocks: list[str] = []
-    for index, concept in enumerate(concepts, start=1):
-        number = concept.get("number") or concept.get("nomor") or index
-        hook = concept.get("hook_scene") or {}
-        production = concept.get("production_requirements") or {}
-        lines = [
-            f"## Video Concept {number}",
-            f"Content Angle: {concept.get('content_angle') or concept.get('angle_konten', '')}",
-            "",
-            "## Hook Scene",
-            f"Duration: {hook.get('duration', '')}",
-            f"Description: {hook.get('description', '')}",
-            f"Dialogue / Text: {hook.get('dialogue_or_text', '')}",
-            f"Visual: {hook.get('visual', '')}",
-        ]
-        body_scenes = concept.get("body_scenes") or []
-        if body_scenes:
-            lines.extend(["", "## Storyboard"])
-            for scene in body_scenes:
-                lines.append(f"- {scene.get('scene', 'Scene')} ({scene.get('duration', '')})")
-                lines.append(f"  Text: {scene.get('scene_text', '')}")
-                if scene.get("visual"):
-                    lines.append(f"  Visual: {scene.get('visual')}")
-        if production:
-            lines.extend([
-                "",
-                "## Production Requirements",
-                f"Talent: {production.get('talent', '')}",
-                f"Location: {production.get('location', '')}",
-                f"Props: {production.get('props', '')}",
-                f"Estimated Duration: {production.get('estimated_total_duration', '')}",
-            ])
-        blocks.append("\n".join(line for line in lines if line is not None).strip())
-    return "\n\n".join(blocks).strip() or "\n".join(format_value_as_text(data)).strip()
-
-
-def format_rana_output(data: dict[str, Any]) -> str:
-    lines = []
-    if data.get("user_summary"):
-        lines.extend(["## Summary", str(data["user_summary"]), ""])
-    if data.get("top_image_ads"):
-        lines.append("## Top Image Ads")
-        lines.append(", ".join(f"#{item}" for item in data["top_image_ads"]))
-        lines.append("")
-    if data.get("top_video_concepts"):
-        lines.append("## Top Video Concepts")
-        lines.append(", ".join(f"Concept {item}" for item in data["top_video_concepts"]))
-        lines.append("")
-    if data.get("choice_rationale"):
-        lines.extend(["## Choice Rationale", str(data["choice_rationale"]), ""])
-    if data.get("needs_human_review"):
-        lines.append("## Needs Human Review")
-        lines.extend(f"- {item}" for item in data["needs_human_review"])
-        lines.append("")
-    if data.get("next_steps"):
-        lines.append("## Next Steps")
-        lines.extend(f"{index}. {step}" for index, step in enumerate(data["next_steps"], start=1))
-        lines.append("")
-    if "run_hagen" in data:
-        lines.extend(["## Run Hagen", "Yes" if data.get("run_hagen") else "No"])
-    return "\n".join(lines).strip() or "\n".join(format_value_as_text(data)).strip()
-
-
-def format_public_agent_output(agent_key: str, raw_text: Optional[str]) -> Optional[str]:
-    if raw_text is None:
-        return None
-    parsed = parse_agent_json_output(raw_text)
-    if not isinstance(parsed, dict):
-        return str(raw_text)
-    if agent_key == "hara":
-        return format_hara_output(parsed)
-    if agent_key == "luna":
-        return format_luna_output(parsed)
-    if agent_key == "rana":
-        return format_rana_output(parsed)
-    return str(raw_text)
 
 
 def repair_truncated_json(text: str) -> str:
@@ -1122,7 +796,7 @@ def repair_truncated_json(text: str) -> str:
     return text
 
 
-def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = JSON_REPAIR_MAX_TOKENS) -> str:
+def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 5000) -> str:
     prompt = render_prompt("json_repair", {
         "SCHEMA_HINT": schema_hint,
         "RAW_OUTPUT": raw_text,
@@ -1134,93 +808,38 @@ def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = JS
         max_tokens=max_tokens,
         max_continuations=1,
     )
-    return repair_truncated_json(extract_json_candidate(converted))
+    return repair_truncated_json(strip_json_fence(converted))
 
 
-def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, max_tokens: int = JSON_REPAIR_MAX_TOKENS) -> str:
-    original_raw = str(raw_text or "").strip()
+def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, max_tokens: int = 5000) -> str:
+    cleaned = repair_truncated_json(strip_json_fence(raw_text))
+    if is_valid_json(cleaned):
+        return cleaned
 
-    def is_technical_key(k: str) -> bool:
-        return isinstance(k, str) and (k.startswith("_") or k in ("raw_output", "_warning", "_parse_error"))
-
-    def sanitize_obj(o: Any) -> Any:
-        if isinstance(o, dict):
-            res = {}
-            for k, v in o.items():
-                if is_technical_key(k):
-                    continue
-                sanitized_v = sanitize_obj(v)
-                res[k] = sanitized_v
-            return res
-        if isinstance(o, list):
-            return [sanitize_obj(i) for i in o]
-        return o
-
-    def parse_sanitized_meaningful(candidate: str) -> Optional[str]:
-        try:
-            parsed = json.loads(candidate)
-        except Exception:
-            return None
-        sanitized = sanitize_obj(parsed)
-        if has_meaningful_json_value(sanitized):
-            return json.dumps(sanitized, ensure_ascii=False)
-        return None
-
-    candidates = []
-    for candidate in (original_raw, extract_json_candidate(original_raw)):
-        if isinstance(candidate, str):
-            candidate = strip_json_fence(candidate).strip()
-            if candidate and candidate not in candidates:
-                candidates.append(candidate)
-
-    # Try direct parse first. Do not repair before validating the original data.
-    for candidate in candidates:
-        parsed_candidate = parse_sanitized_meaningful(candidate)
-        if parsed_candidate:
-            return parsed_candidate
-
-    repaired_candidates = []
-    for candidate in candidates:
-        repaired = repair_truncated_json(candidate)
-        if isinstance(repaired, str):
-            repaired = repaired.strip()
-            if repaired and repaired not in repaired_candidates:
-                repaired_candidates.append(repaired)
-
-    for candidate in repaired_candidates:
-        parsed_candidate = parse_sanitized_meaningful(candidate)
-        if parsed_candidate:
-            return parsed_candidate
-
-    # Try converting to schema-guided JSON if provided
     if schema_hint:
-        logger.warning("Agent output is invalid JSON; converting to requested schema")
+        logger.warning(
+            "Agent output is invalid JSON; converting to requested schema")
         try:
-            converted = convert_to_schema_json(original_raw, schema_hint, max_tokens=max_tokens)
-            converted_candidate = parse_sanitized_meaningful(converted)
-            if converted_candidate:
-                return converted_candidate
+            converted = convert_to_schema_json(
+                cleaned, schema_hint, max_tokens=max_tokens)
+            if is_valid_json(converted):
+                return converted
         except APIError:
-            logger.exception("JSON conversion pass failed due to Anthropic API error")
+            logger.exception(
+                "JSON conversion pass failed due to Anthropic API error")
         except Exception:
             logger.exception("JSON conversion pass failed unexpectedly")
 
-    # Final fallback: preserve the full original raw output inside a wrapper.
-    logger.warning("Agent output is still invalid JSON after repair; returning raw_output wrapper so no data is lost")
-    parse_error = None
-    try:
-        json.loads(original_raw)
-    except Exception as exc:
-        parse_error = str(exc)
-
+    logger.warning(
+        "Agent output is still invalid JSON after repair; wrapping raw output")
     return json.dumps(
         {
             "_status": "partial_or_invalid_json",
             "_warning": (
-                "Model output could not be parsed safely. Showing raw output."
+                "The AI output was truncated or was not valid JSON. "
+                "The raw output was preserved so no information is lost."
             ),
-            "_parse_error": parse_error,
-            "raw_output": original_raw,
+            "raw_output": cleaned,
         },
         ensure_ascii=False,
     )
@@ -1228,10 +847,8 @@ def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, ma
 
 def rana_init(state: AgentState) -> StateUpdate:
     """Prepare context for Hara."""
-    user_id = state.get("user_id", "anonymous")
-    user_insights = get_user_learning(user_id)
     learning = "\n".join([
-        f"- {item['insight']}" for item in user_insights[-5:]
+        f"- {item['insight']}" for item in rana_learning[-5:]
     ]) or "No previous learning is available."
 
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
@@ -1260,7 +877,7 @@ def rana_init(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt)
+    result = call_model(provider, model_name, system, prompt, max_tokens=500)
     return {"current_step": "hara", "messages": [{"role": "assistant", "content": f"[RANA] {result}"}]}
 
 
@@ -1282,19 +899,17 @@ def hara_research(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hara"), prompt, max_tokens=AGENT_MAX_TOKENS)
+        "hara"), prompt, max_tokens=1500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hara"), max_tokens=JSON_REPAIR_MAX_TOKENS)
+        result, load_prompt("schema_hara"), max_tokens=1500)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
             "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
 
 def rana_validate_hara(state: AgentState) -> StateUpdate:
     """Validate Hara output."""
-    user_id = state.get("user_id", "anonymous")
-    user_insights = get_user_learning(user_id)
     learning = "\n".join(
-        [f"- {item['insight']}" for item in user_insights[-5:]]) or "None."
+        [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     prompt = render_prompt("workflow_rana_validate_hara", {
@@ -1304,7 +919,7 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt)
+    result = call_model(provider, model_name, system, prompt, max_tokens=600)
     return {"current_step": "creative_agents",
             "messages": [{"role": "assistant", "content": f"[RANA VALIDATES HARA] {result}"}]}
 
@@ -1320,9 +935,9 @@ def bombom_create_ads(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "bombom"), prompt, max_tokens=AGENT_MAX_TOKENS)
+        "bombom"), prompt, max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_bombom"), max_tokens=JSON_REPAIR_MAX_TOKENS)
+        result, load_prompt("schema_bombom"), max_tokens=3000)
     return {"bombom_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
@@ -1338,19 +953,17 @@ def luna_create_video(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "luna"), prompt, max_tokens=AGENT_MAX_TOKENS)
+        "luna"), prompt, max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_luna"), max_tokens=JSON_REPAIR_MAX_TOKENS)
+        result, load_prompt("schema_luna"), max_tokens=3000)
     return {"luna_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
 
 def rana_final_decision(state: AgentState) -> StateUpdate:
     """Create Rana final decision."""
-    user_id = state.get("user_id", "anonymous")
-    user_insights = get_user_learning(user_id)
     learning = "\n".join(
-        [f"- {item['insight']}" for item in user_insights[-5:]]) or "None."
+        [f"- {item['insight']}" for item in rana_learning[-5:]]) or "None."
     system = render_prompt("rana", {"LEARNING_CONTEXT": learning})
 
     prompt = render_prompt("workflow_rana_final_decision", {
@@ -1361,9 +974,9 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=FINAL_MAX_TOKENS)
+    result = call_model(provider, model_name, system, prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_rana_final"), max_tokens=JSON_REPAIR_MAX_TOKENS)
+        result, load_prompt("schema_rana_final"), max_tokens=1000)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1389,9 +1002,9 @@ def hagen_execute(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hagen"), prompt, max_tokens=AGENT_MAX_TOKENS)
+        "hagen"), prompt, max_tokens=2500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hagen"), max_tokens=JSON_REPAIR_MAX_TOKENS)
+        result, load_prompt("schema_hagen"), max_tokens=2500)
     return {"hagen_output": cleaned_result, "current_step": "done",
             "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
@@ -1417,9 +1030,10 @@ def build_graph():
     graph.set_entry_point("rana_init")
     graph.add_edge("rana_init", "hara_research")
     graph.add_edge("hara_research", "rana_validate_hara")
-    # Keep creative agents sequential so the final decision sees both complete outputs.
+    # Run Bombom and Luna after Hara validation.
     graph.add_edge("rana_validate_hara", "bombom_create_ads")
-    graph.add_edge("bombom_create_ads", "luna_create_video")
+    graph.add_edge("rana_validate_hara", "luna_create_video")
+    graph.add_edge("bombom_create_ads", "rana_final_decision")
     graph.add_edge("luna_create_video", "rana_final_decision")
     graph.add_conditional_edges(
         "rana_final_decision",
@@ -1440,7 +1054,7 @@ compiled_graph = build_graph()
 # API endpoints.
 class RunRequest(BaseModel):
     session_id: str
-    user_id: str = "anonymous"
+    user_id: Optional[str] = None
     product_context: str
     run_hagen: bool = False
     opts: Optional[dict[str, str]] = None
@@ -1452,7 +1066,7 @@ class ContinueRequest(RunRequest):
 
 class FeedbackRequest(BaseModel):
     session_id: str
-    user_id: str = "anonymous"
+    user_id: Optional[str] = None
     feedback: str
 
 
@@ -1572,11 +1186,12 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
 async def run_agents(request: RunRequest):
     """Run the full multi-agent pipeline."""
     validate_product_context(request.product_context)
-    history = get_memory(request.session_id)
+    ensure_session_capacity(
+        request.session_id, request.user_id, added_messages=6)
+    history = get_memory(request.session_id, request.user_id)
 
     initial_state: AgentState = {
         "session_id": request.session_id,
-        "user_id": request.user_id,
         "product_context": request.product_context,
         "uploaded_files": [],
         "hara_output": None,
@@ -1606,27 +1221,15 @@ async def run_agents(request: RunRequest):
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"])
-    save_user_insight(
-        request.user_id,
-        request.session_id,
-        f"Product context used in this session:\n{request.product_context}",
-    )
-
-    output_fallbacks = extract_agent_outputs_from_messages(result.get("messages", []))
-    hara_output = result.get("hara_output") or output_fallbacks.get("hara_output")
-    bombom_output = result.get("bombom_output") or output_fallbacks.get("bombom_output")
-    luna_output = result.get("luna_output") or output_fallbacks.get("luna_output")
-    hagen_output = result.get("hagen_output") or output_fallbacks.get("hagen_output")
-    rana_decision = result.get("rana_decision") or output_fallbacks.get("rana_decision")
+    save_memory(request.session_id, result["messages"], request.user_id)
 
     return {
         "session_id": request.session_id,
-        "hara_output": format_public_agent_output("hara", hara_output),
-        "bombom_output": bombom_output,
-        "luna_output": format_public_agent_output("luna", luna_output),
-        "hagen_output": hagen_output,
-        "rana_decision": format_public_agent_output("rana", rana_decision),
+        "hara_output": result.get("hara_output"),
+        "bombom_output": result.get("bombom_output"),
+        "luna_output": result.get("luna_output"),
+        "hagen_output": result.get("hagen_output"),
+        "rana_decision": result.get("rana_decision"),
         "steps_completed": result.get("current_step"),
     }
 
@@ -1641,7 +1244,9 @@ async def continue_agents(request: ContinueRequest):
             detail="additional_input is too short. Add specific context for the revision."
         )
 
-    history = get_memory(request.session_id)
+    ensure_session_capacity(
+        request.session_id, request.user_id, added_messages=7)
+    history = get_memory(request.session_id, request.user_id)
     additional_entry = {
         "role": "user",
         "content": f"[USER ADDITIONAL INPUT]\n{request.additional_input.strip()}"
@@ -1656,7 +1261,6 @@ Use this additional input to complete or revise the previous output in this sess
 
     initial_state: AgentState = {
         "session_id": request.session_id,
-        "user_id": request.user_id,
         "product_context": updated_context,
         "uploaded_files": [],
         "hara_output": None,
@@ -1686,27 +1290,15 @@ Use this additional input to complete or revise the previous output in this sess
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"])
-    save_user_insight(
-        request.user_id,
-        request.session_id,
-        f"User revision preference or extra context:\n{request.additional_input.strip()}",
-    )
-
-    output_fallbacks = extract_agent_outputs_from_messages(result.get("messages", []))
-    hara_output = result.get("hara_output") or output_fallbacks.get("hara_output")
-    bombom_output = result.get("bombom_output") or output_fallbacks.get("bombom_output")
-    luna_output = result.get("luna_output") or output_fallbacks.get("luna_output")
-    hagen_output = result.get("hagen_output") or output_fallbacks.get("hagen_output")
-    rana_decision = result.get("rana_decision") or output_fallbacks.get("rana_decision")
+    save_memory(request.session_id, result["messages"], request.user_id)
 
     return {
         "session_id": request.session_id,
-        "hara_output": format_public_agent_output("hara", hara_output),
-        "bombom_output": bombom_output,
-        "luna_output": format_public_agent_output("luna", luna_output),
-        "hagen_output": hagen_output,
-        "rana_decision": format_public_agent_output("rana", rana_decision),
+        "hara_output": result.get("hara_output"),
+        "bombom_output": result.get("bombom_output"),
+        "luna_output": result.get("luna_output"),
+        "hagen_output": result.get("hagen_output"),
+        "rana_decision": result.get("rana_decision"),
         "steps_completed": result.get("current_step"),
     }
 
@@ -1714,6 +1306,7 @@ Use this additional input to complete or revise the previous output in this sess
 @app.post("/api/upload")
 async def upload_file(
     session_id: str = Form(...),
+    user_id: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
     """Upload a product brief or document."""
@@ -1747,13 +1340,14 @@ async def upload_file(
             detail="Uploaded file does not contain enough readable text."
         )
 
-    if session_id not in session_memory:
-        session_memory[session_id] = []
+    key = memory_key(session_id, user_id)
+    if key not in session_memory:
+        session_memory[key] = []
 
     # Store uploaded file text in session memory.
     file_entry = f"[FILE: {filename}]\n{text_content[:3000]}"
-    session_memory[session_id].append({"role": "user", "content": file_entry})
-    save_memory(session_id, session_memory[session_id])
+    session_memory[key].append({"role": "user", "content": file_entry})
+    save_memory(session_id, session_memory[key], user_id)
 
     return {"status": "ok", "file_name": filename, "preview": text_content[:200]}
 
@@ -1767,21 +1361,21 @@ async def save_feedback(data: FeedbackRequest):
 
     rana_learning.append({
         "session_id": data.session_id,
+        "user_id": data.user_id or "guest",
         "insight": data.feedback,
         "timestamp": str(asyncio.get_event_loop().time())
     })
-    save_user_insight(data.user_id, data.session_id, data.feedback)
     return {"status": "saved"}
 
 
 @app.get("/api/memory/{session_id}")
-async def get_session_memory(session_id: str):
-    return {"messages": get_memory(session_id)}
+async def get_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
+    return {"messages": get_memory(session_id, user_id)}
 
 
 @app.delete("/api/memory/{session_id}")
-async def clear_session_memory(session_id: str):
-    session_memory.pop(session_id, None)
+async def clear_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
+    session_memory.pop(memory_key(session_id, user_id), None)
     return {"status": "cleared"}
 
 

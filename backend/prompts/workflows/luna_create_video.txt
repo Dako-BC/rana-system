@@ -5,3 +5,6 @@ Product:
 [[PRODUCT_CONTEXT]]
 
 Create 3-5 video ad concepts with varied angles.
+
+If Hara output is incomplete or missing, still produce best-effort concepts
+based on available product context. Note assumptions in the closest field.
