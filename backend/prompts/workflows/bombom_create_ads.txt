@@ -5,3 +5,6 @@ Product:
 [[PRODUCT_CONTEXT]]
 
 Create 10 powerful image ad concepts with strong stopping power.
+
+If Hara output is incomplete or missing, still produce best-effort concepts
+based on available product context. Note assumptions in production_notes.

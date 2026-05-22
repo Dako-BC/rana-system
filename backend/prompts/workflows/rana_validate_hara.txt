@@ -1,6 +1,20 @@
 Output from Hara (Research Agent):
 [[HARA_OUTPUT]]
 
+Validate the Hara output using the criteria below.
+
+APPROVAL CRITERIA — approve if ALL of the following are true:
+- main_pain_point is specific and actionable, not generic
+- decision_trigger is concrete (not "affordable price" or "good quality")
+- at least 2 objection handlings are present
+- ad_insight is directly usable by the creative team
+
+REVISION CRITERIA — request revision if ANY of the following:
+- pain point is vague or could apply to any product
+- decision_trigger is a generic marketing cliche
+- objection handling is missing or too shallow
+- ad_insight is theoretical and not actionable
+
 Format JSON:
 {
   "status": "approved" / "revision_needed",

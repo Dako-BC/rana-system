@@ -1,8 +1,17 @@
-Product context from the user:
-[[PRODUCT_CONTEXT]][[FILE_CONTEXT]][[SESSION_CONTEXT]]
+Product context:
+[[PRODUCT_CONTEXT]]
+
+Uploaded file context (if any):
+[[FILE_CONTEXT]]
+
+Previous session context (if any):
+[[SESSION_CONTEXT]]
 
 Task: Summarize the context that will be sent to Hara for research.
 Also decide whether any information is missing. Return JSON.
+
+If all placeholders above are empty or minimal, still return best-effort JSON
+and flag what is missing in "additional_info_needed".
 
 Format:
 {

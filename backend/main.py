@@ -280,7 +280,8 @@ def get_memory(session_id: str, user_id: Optional[str] = None) -> list:
 
 
 def save_memory(session_id: str, messages: list, user_id: Optional[str] = None):
-    session_memory[memory_key(session_id, user_id)] = messages[-MAX_SESSION_MESSAGES:]
+    session_memory[memory_key(session_id, user_id)
+                   ] = messages[-MAX_SESSION_MESSAGES:]
 
 
 def ensure_session_capacity(session_id: str, user_id: Optional[str] = None, added_messages: int = 0):
@@ -876,7 +877,7 @@ def rana_init(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt)
+    result = call_model(provider, model_name, system, prompt, max_tokens=500)
     return {"current_step": "hara", "messages": [{"role": "assistant", "content": f"[RANA] {result}"}]}
 
 
@@ -898,9 +899,9 @@ def hara_research(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hara"), prompt, max_tokens=8000)
+        "hara"), prompt, max_tokens=1500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hara"), max_tokens=8000)
+        result, load_prompt("schema_hara"), max_tokens=1500)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
             "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
@@ -918,7 +919,7 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt)
+    result = call_model(provider, model_name, system, prompt, max_tokens=600)
     return {"current_step": "creative_agents",
             "messages": [{"role": "assistant", "content": f"[RANA VALIDATES HARA] {result}"}]}
 
@@ -934,9 +935,9 @@ def bombom_create_ads(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "bombom"), prompt, max_tokens=8000)
+        "bombom"), prompt, max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_bombom"), max_tokens=8000)
+        result, load_prompt("schema_bombom"), max_tokens=3000)
     return {"bombom_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
@@ -952,9 +953,9 @@ def luna_create_video(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "luna"), prompt, max_tokens=8000)
+        "luna"), prompt, max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_luna"), max_tokens=8000)
+        result, load_prompt("schema_luna"), max_tokens=3000)
     return {"luna_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
@@ -973,9 +974,9 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=5000)
+    result = call_model(provider, model_name, system, prompt, max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_rana_final"), max_tokens=5000)
+        result, load_prompt("schema_rana_final"), max_tokens=1000)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1001,9 +1002,9 @@ def hagen_execute(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hagen"), prompt, max_tokens=8000)
+        "hagen"), prompt, max_tokens=2500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hagen"), max_tokens=8000)
+        result, load_prompt("schema_hagen"), max_tokens=2500)
     return {"hagen_output": cleaned_result, "current_step": "done",
             "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
@@ -1185,7 +1186,8 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
 async def run_agents(request: RunRequest):
     """Run the full multi-agent pipeline."""
     validate_product_context(request.product_context)
-    ensure_session_capacity(request.session_id, request.user_id, added_messages=6)
+    ensure_session_capacity(
+        request.session_id, request.user_id, added_messages=6)
     history = get_memory(request.session_id, request.user_id)
 
     initial_state: AgentState = {
@@ -1242,7 +1244,8 @@ async def continue_agents(request: ContinueRequest):
             detail="additional_input is too short. Add specific context for the revision."
         )
 
-    ensure_session_capacity(request.session_id, request.user_id, added_messages=7)
+    ensure_session_capacity(
+        request.session_id, request.user_id, added_messages=7)
     history = get_memory(request.session_id, request.user_id)
     additional_entry = {
         "role": "user",
