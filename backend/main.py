@@ -78,6 +78,7 @@ PROVIDER_MODELS = {
         "gemini-1.5-pro",
     ],
     "openrouter": [
+        "openai/gpt-oss-120b:free",
         "deepseek/deepseek-chat-v3-0324",
         "qwen/qwen3-32b",
         "mistralai/mistral-small-3.1-24b-instruct",

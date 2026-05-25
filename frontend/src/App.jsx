@@ -1,12 +1,26 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { runAgents, continueSession, uploadFile, saveFeedback, clearMemory, getModelAvailability } from './lib/api.js'
+import {
+  createAccountWithEmail,
+  deleteSessionFromCloud,
+  fetchSessionState,
+  fetchUserSessions,
+  isFirebaseConfigured,
+  saveSessionToCloud,
+  signInWithEmail,
+  signInWithGoogleAccount,
+  signOutFirebase,
+  subscribeToAuth,
+} from './lib/firebase.js'
 
 // Helpers.
 const SESSION_KEY = 'rana_session_id'
 const USER_KEY = 'rana_guest_user_id'
 const SESSION_LIST_PREFIX = 'rana_session_list:'
 const SESSION_STATE_PREFIX = 'rana_session_state:'
+const POST_REGISTER_LOGOUT_KEY = 'rana_post_register_logout'
+const POST_REGISTER_NOTICE_KEY = 'rana_post_register_notice'
 const MAX_SESSIONS = 3
 const MAX_SESSION_CHARS = 18000
 const SESSION_WARNING_CHARS = 13000
@@ -209,7 +223,7 @@ function getFriendlyErrorMessage(error) {
   if (/network|fetch|failed to fetch/.test(normalized)) {
     return 'Unable to connect to the system. Make sure your internet connection is stable, then try again.'
   }
-  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok/.test(normalized)) {
+  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok|groq/.test(normalized)) {
     return 'The AI service request failed. Check the backend terminal for error details, API key configuration, quota, or rate limit.'
   }
   if (/api/.test(normalized)) {
@@ -291,6 +305,7 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI',
   gemini: 'Gemini',
   openrouter: 'OpenRouter',
+  groq: 'Groq',
 }
 
 const PROVIDER_MODELS = {
@@ -313,10 +328,16 @@ const PROVIDER_MODELS = {
     'gemini-1.5-pro',
   ],
   openrouter: [
+    'openai/gpt-oss-120b:free',
     'deepseek/deepseek-chat-v3-0324',
     'qwen/qwen3-32b',
     'mistralai/mistral-small-3.1-24b-instruct',
     'openai/gpt-4o-mini',
+  ],
+  groq: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
   ],
 }
 
@@ -1270,9 +1291,132 @@ function FeedbackBar({ sessionId, userId, onDone }) {
   )
 }
 
+function LoginView() {
+  const [mode, setMode] = useState('login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState(() => {
+    const savedNotice = sessionStorage.getItem(POST_REGISTER_NOTICE_KEY) || ''
+    sessionStorage.removeItem(POST_REGISTER_NOTICE_KEY)
+    return savedNotice
+  })
+  const isRegister = mode === 'register'
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      if (isRegister) {
+        sessionStorage.setItem(POST_REGISTER_LOGOUT_KEY, '1')
+        sessionStorage.setItem(POST_REGISTER_NOTICE_KEY, 'Register selesai. Silakan login dengan akun yang baru dibuat.')
+        await createAccountWithEmail({ name, email, password })
+      } else {
+        await signInWithEmail(email, password)
+      }
+    } catch (e) {
+      sessionStorage.removeItem(POST_REGISTER_LOGOUT_KEY)
+      sessionStorage.removeItem(POST_REGISTER_NOTICE_KEY)
+      setError(e.message || 'Login failed. Check your account and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGoogle = async () => {
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      await signInWithGoogleAccount()
+    } catch (e) {
+      setError(e.message || 'Google login failed. Try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-mark">R</div>
+          <div>
+            <h1>Rana</h1>
+            <p>Marketing system</p>
+          </div>
+        </div>
+
+        {!isFirebaseConfigured ? (
+          <div className="login-error">
+            Firebase belum dikonfigurasi. Isi file <code>.env</code> dari <code>.env.example</code>, lalu restart Vite.
+          </div>
+        ) : (
+          <>
+            <div className="login-tabs" role="tablist" aria-label="Authentication mode">
+              <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError('') }}>
+                Login
+              </button>
+              <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); setNotice('') }}>
+                Register
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="login-form">
+              {isRegister && (
+                <label>
+                  Name
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Nama akun" autoComplete="name" />
+                </label>
+              )}
+              <label>
+                Email
+                <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="email@example.com" autoComplete="email" required />
+              </label>
+              <label>
+                Password
+                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Minimal 6 karakter" autoComplete={isRegister ? 'new-password' : 'current-password'} required />
+              </label>
+              {notice && <div className="login-notice">{notice}</div>}
+              {error && <div className="login-error">{error}</div>}
+              <button type="submit" className="login-primary" disabled={loading}>
+                {loading ? 'Please wait...' : isRegister ? 'Create account' : 'Login'}
+              </button>
+            </form>
+
+            <button type="button" className="login-google" onClick={handleGoogle} disabled={loading}>
+              Continue with Google
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AuthLoadingView() {
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-mark">R</div>
+          <div>
+            <h1>Rana</h1>
+            <p>Loading account...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Main app.
-export default function App() {
-  const userId = useRef(getUserId()).current
+function RanaApp({ authUser }) {
+  const userId = authUser.uid
   const [sessionList, setSessionList] = useState(() => readSessionList(userId))
   const [sessionId, setSessionId] = useState(() => getSessionId(userId))
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
@@ -1299,6 +1443,9 @@ export default function App() {
   const [showFeedback, setShowFeedback] = useState(Boolean(savedState?.result))
   const [additionalInput, setAdditionalInput] = useState(savedState?.additionalInput || '')
   const [modelAvailability, setModelAvailability] = useState(null)
+  const [cloudReady, setCloudReady] = useState(!isFirebaseConfigured)
+  const [cloudError, setCloudError] = useState('')
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const fileRef = useRef()
 
   useEffect(() => {
@@ -1357,9 +1504,16 @@ Additional notes: ${wizardForm.catatan}
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, MAX_SESSIONS)
       writeSessionList(userId, updated)
+      if (cloudReady) {
+        const currentSession = updated.find(session => session.id === sessionId)
+        saveSessionToCloud(userId, currentSession, state).catch(e => {
+          console.warn('Failed to sync session to Firebase:', e)
+          setCloudError('Progress tersimpan lokal, tapi belum berhasil sync ke Firebase.')
+        })
+      }
       return updated
     })
-  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading])
+  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading, cloudReady, userId])
 
   useEffect(() => {
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
@@ -1418,6 +1572,46 @@ Additional notes: ${wizardForm.catatan}
     if (window.innerWidth <= 980) setSidebarOpen(false)
   }
 
+  useEffect(() => {
+    if (!isFirebaseConfigured) return
+    let cancelled = false
+
+    const hydrateFromCloud = async () => {
+      setCloudReady(false)
+      setCloudError('')
+      try {
+        const cloudSessions = await fetchUserSessions(userId, MAX_SESSIONS)
+        if (cancelled) return
+
+        if (cloudSessions.length) {
+          const states = await Promise.all(
+            cloudSessions.map(async session => [session.id, await fetchSessionState(userId, session.id)])
+          )
+          if (cancelled) return
+
+          states.forEach(([id, state]) => {
+            if (state) writeSessionState(id, state)
+          })
+          writeSessionList(userId, cloudSessions)
+          setSessionList(cloudSessions)
+          loadSessionState(cloudSessions[0].id)
+        }
+      } catch (e) {
+        console.warn('Failed to load Firebase sessions:', e)
+        if (!cancelled) {
+          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+        }
+      } finally {
+        if (!cancelled) setCloudReady(true)
+      }
+    }
+
+    hydrateFromCloud()
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
   const createNewSession = async () => {
     const existing = readSessionList(userId)
     const nextId = uuidv4()
@@ -1429,6 +1623,7 @@ Additional notes: ${wizardForm.catatan}
     evicted.forEach(session => {
       clearSessionState(session.id)
       clearMemory(session.id, userId).catch(() => { })
+      deleteSessionFromCloud(userId, session.id).catch(() => { })
     })
 
     const nextList = [
@@ -1438,6 +1633,7 @@ Additional notes: ${wizardForm.catatan}
     writeSessionList(userId, nextList)
     setSessionList(nextList)
     writeSessionState(nextId, getEmptySessionState())
+    saveSessionToCloud(userId, nextList[0], getEmptySessionState()).catch(() => { })
     loadSessionState(nextId)
   }
 
@@ -1639,6 +1835,12 @@ Additional notes: ${wizardForm.catatan}
     })
   }
 
+  const handleSignOut = async () => {
+    if (loading) return
+    setShowLogoutConfirm(false)
+    await signOutFirebase()
+  }
+
   return (
     <div className="app-shell" style={{ minHeight: '100vh', background: 'var(--bg)' }}>
       {/* Header */}
@@ -1681,6 +1883,18 @@ Additional notes: ${wizardForm.catatan}
           <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
             5 agents
           </span>
+          <span style={{ fontSize: 11, color: cloudError ? '#e07070' : 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }} title={cloudError || authUser.email || authUser.uid}>
+            {cloudReady ? (cloudError ? 'local save' : 'cloud save') : 'syncing'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowLogoutConfirm(true)}
+            disabled={loading}
+            className="icon-btn"
+            title={authUser.email || authUser.displayName || 'Signed in'}
+          >
+            Logout
+          </button>
           {result && (
             <button onClick={handleClear} style={{
               marginLeft: 8, padding: '5px 12px', background: 'none',
@@ -1723,6 +1937,40 @@ Additional notes: ${wizardForm.catatan}
                 onClick={handleConfirmNewSession}
               >
                 Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLogoutConfirm && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowLogoutConfirm(false)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-confirm-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">Logout</div>
+            <h2 id="logout-confirm-title">Keluar dari akun?</h2>
+            <p>
+              Progress yang sudah tersimpan akan tetap ada di akun ini. Kamu perlu login lagi untuk melanjutkan sesi.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setShowLogoutConfirm(false)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleSignOut}
+              >
+                Logout
               </button>
             </div>
           </div>
@@ -2334,4 +2582,33 @@ Additional notes: ${wizardForm.catatan}
       </div>
     </div>
   )
+}
+
+export default function App() {
+  const [authUser, setAuthUser] = useState(null)
+  const [checkingAuth, setCheckingAuth] = useState(true)
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAuth(user => {
+      if (user && sessionStorage.getItem(POST_REGISTER_LOGOUT_KEY) === '1') {
+        setCheckingAuth(true)
+        signOutFirebase()
+          .catch(() => {})
+          .finally(() => {
+            sessionStorage.removeItem(POST_REGISTER_LOGOUT_KEY)
+            setAuthUser(null)
+            setCheckingAuth(false)
+          })
+        return
+      }
+      setAuthUser(user)
+      setCheckingAuth(false)
+    })
+    return unsubscribe
+  }, [])
+
+  if (checkingAuth) return <AuthLoadingView />
+  if (!authUser) return <LoginView />
+
+  return <RanaApp key={authUser.uid} authUser={authUser} />
 }

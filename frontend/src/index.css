@@ -130,6 +130,176 @@ body {
   padding-top: var(--header-height);
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(196, 168, 130, 0.12), transparent 32%),
+    var(--bg);
+}
+
+.login-card {
+  width: min(100%, 420px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(17, 17, 19, 0.92);
+  padding: 26px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.login-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(196, 168, 130, 0.34);
+  background: rgba(196, 168, 130, 0.12);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 24px;
+}
+
+.login-brand h1 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.05;
+}
+
+.login-brand p {
+  margin: 3px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.login-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 18px;
+}
+
+.login-tabs button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.login-tabs button.active {
+  background: rgba(196, 168, 130, 0.13);
+  color: var(--accent);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.login-form input {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  outline: none;
+}
+
+.login-form input:focus {
+  border-color: rgba(196, 168, 130, 0.38);
+}
+
+.login-primary,
+.login-google {
+  width: 100%;
+  min-height: 42px;
+  border-radius: var(--radius);
+  font-family: var(--font-body);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-primary {
+  margin-top: 4px;
+  border: 1px solid rgba(196, 168, 130, 0.35);
+  background: rgba(196, 168, 130, 0.15);
+  color: var(--accent);
+}
+
+.login-google {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+}
+
+.login-primary:disabled,
+.login-google:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.login-error {
+  padding: 11px 12px;
+  border: 1px solid rgba(196, 80, 80, 0.25);
+  border-radius: 8px;
+  background: rgba(196, 80, 80, 0.08);
+  color: #e07070;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.login-notice {
+  padding: 11px 12px;
+  border: 1px solid rgba(130, 196, 160, 0.25);
+  border-radius: 8px;
+  background: rgba(130, 196, 160, 0.08);
+  color: var(--hara);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.login-error code {
+  color: var(--text);
+}
+
 .app-header {
   position: fixed;
   top: 0;
