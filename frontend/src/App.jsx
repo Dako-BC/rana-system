@@ -440,7 +440,7 @@ function OutputCard({ agentKey, content, title }) {
       if (!hasHaraData) return <SummaryView data={parsed} />
 
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="hara-output" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
           {/* Target Market */}
           {(tm.demographics || tm.psychographics || tm.fb_interest_targeting?.length) && (
@@ -2018,7 +2018,7 @@ Additional notes: ${wizardForm.catatan}
         </div>
       </aside>
 
-      <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`} style={{ maxWidth: 1280, margin: '0 auto', width: '100%' }}>
+      <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`}>
         {/* LEFT PANEL */}
         <div className="app-left-panel">
           <div className={`session-meter ${sessionUsage >= SESSION_WARNING_CHARS ? 'warning' : ''}`}>

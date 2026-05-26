@@ -317,17 +317,24 @@ body {
 
 .app-page {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
   gap: 32px;
   align-items: start;
   padding: 32px 24px;
   box-sizing: border-box;
   width: 100%;
-  transition: padding-left 0.25s ease;
+  max-width: 1280px;
+  margin: 0 auto;
+  transition: margin-left 0.25s ease, width 0.25s ease, padding 0.25s ease, gap 0.25s ease;
 }
 
 .app-page.with-history {
-  padding-left: 304px;
+  width: calc(100% - 280px);
+  max-width: none;
+  margin-left: 280px;
+  margin-right: 0;
+  padding-left: 24px;
+  gap: 24px;
 }
 
 .app-left-panel {
@@ -346,6 +353,12 @@ body {
   gap: 20px;
   min-height: 400px;
   min-width: 0;
+  max-width: 100%;
+}
+
+.app-right-panel>* {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .two-col-grid {
@@ -369,10 +382,15 @@ body {
     padding: 20px 16px;
     gap: 20px;
     align-items: start;
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto;
   }
 
   .app-page.with-history {
     padding-left: 16px;
+    width: 100%;
+    margin: 0 auto;
   }
 
   .history-sidebar {
@@ -659,6 +677,19 @@ body {
   font-size: 13px;
   color: var(--text-2);
   line-height: 1.7;
+}
+
+.hara-output,
+.hara-output * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.hara-output p,
+.hara-output span:not([style*="border-radius: 20px"]) {
+  white-space: pre-wrap;
 }
 
 .bombom-concept-card {
