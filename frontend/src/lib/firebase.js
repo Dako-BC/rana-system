@@ -17,6 +17,7 @@ import {
   getDocs,
   getFirestore,
   limit,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
@@ -44,8 +45,19 @@ export const auth = app ? getAuth(app) : null
 const db = app ? getFirestore(app) : null
 const googleProvider = new GoogleAuthProvider()
 
+const userDoc = (uid) => doc(db, 'users', uid)
 const sessionsCollection = (uid) => collection(db, 'users', uid, 'sessions')
 const sessionDoc = (uid, sessionId) => doc(db, 'users', uid, 'sessions', sessionId)
+
+function mapSessionDoc(item) {
+  const data = item.data()
+  const { state, cloudUpdatedAt, ...session } = data
+  return {
+    ...session,
+    id: item.id,
+    updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : Date.now(),
+  }
+}
 
 export function subscribeToAuth(callback) {
   if (!auth) {
@@ -83,15 +95,56 @@ export async function fetchUserSessions(uid, maxSessions) {
   if (!db || !uid) return []
   const q = query(sessionsCollection(uid), orderBy('updatedAt', 'desc'), limit(maxSessions))
   const snapshot = await getDocs(q)
-  return snapshot.docs.map(item => {
-    const data = item.data()
-    const { state, cloudUpdatedAt, ...session } = data
-    return {
-      ...session,
-      id: item.id,
-      updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : Date.now(),
+  return snapshot.docs.map(mapSessionDoc)
+}
+
+export function subscribeToUserSessions(uid, maxSessions, callback, onError) {
+  if (!db || !uid) {
+    callback([])
+    return () => {}
+  }
+  const q = query(sessionsCollection(uid), orderBy('updatedAt', 'desc'), limit(maxSessions))
+  return onSnapshot(q, snapshot => {
+    callback(snapshot.docs.map(mapSessionDoc))
+  }, onError)
+}
+
+export async function fetchUserHistory(uid) {
+  if (!db || !uid) return { sessions: [], states: {} }
+  const snapshot = await getDoc(userDoc(uid))
+  if (!snapshot.exists()) return { sessions: [], states: {} }
+  const data = snapshot.data()
+  return {
+    sessions: Array.isArray(data.sessions) ? data.sessions : [],
+    states: data.sessionStates && typeof data.sessionStates === 'object' ? data.sessionStates : {},
+  }
+}
+
+export function subscribeToUserHistory(uid, callback, onError) {
+  if (!db || !uid) {
+    callback({ sessions: [], states: {} })
+    return () => {}
+  }
+  return onSnapshot(userDoc(uid), snapshot => {
+    if (!snapshot.exists()) {
+      callback({ sessions: [], states: {} })
+      return
     }
-  })
+    const data = snapshot.data()
+    callback({
+      sessions: Array.isArray(data.sessions) ? data.sessions : [],
+      states: data.sessionStates && typeof data.sessionStates === 'object' ? data.sessionStates : {},
+    })
+  }, onError)
+}
+
+export async function saveUserHistory(uid, sessions, states) {
+  if (!db || !uid) return
+  await setDoc(userDoc(uid), {
+    sessions,
+    sessionStates: states,
+    historyUpdatedAt: serverTimestamp(),
+  }, { merge: true })
 }
 
 export async function fetchSessionState(uid, sessionId) {

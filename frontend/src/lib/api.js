@@ -85,6 +85,24 @@ export async function saveFeedback(sessionId, feedback, userId) {
   return res.json()
 }
 
+export async function fetchBackendHistory(userId) {
+  if (!userId) return { sessions: [], states: {} }
+  const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(userId)}`))
+  if (!res.ok) throw await parseApiError(res)
+  return res.json()
+}
+
+export async function saveBackendHistory(userId, sessions, states) {
+  if (!userId) return { status: 'skipped' }
+  const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(userId)}`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessions, states }),
+  })
+  if (!res.ok) throw await parseApiError(res)
+  return res.json()
+}
+
 export async function clearMemory(sessionId, userId) {
   const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
   const res = await fetch(apiUrl(`/api/memory/${sessionId}${query}`), { method: 'DELETE' })

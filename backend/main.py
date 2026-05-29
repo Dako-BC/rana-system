@@ -9,6 +9,7 @@ import re
 import json
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Optional, Annotated
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
@@ -49,6 +50,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+DATA_DIR = Path(os.environ.get("RANA_DATA_DIR", Path(__file__).resolve().parent / "data"))
+HISTORY_DB_PATH = DATA_DIR / "history.json"
+history_db_lock = threading.Lock()
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -1165,6 +1170,30 @@ class FeedbackRequest(BaseModel):
     feedback: str
 
 
+class HistoryPayload(BaseModel):
+    sessions: list[dict[str, Any]] = []
+    states: dict[str, Any] = {}
+
+
+def read_history_db() -> dict[str, Any]:
+    with history_db_lock:
+        if not HISTORY_DB_PATH.exists():
+            return {}
+        try:
+            return json.loads(HISTORY_DB_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.exception("Failed to read history database")
+            return {}
+
+
+def write_history_db(data: dict[str, Any]) -> None:
+    with history_db_lock:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = HISTORY_DB_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp_path.replace(HISTORY_DB_PATH)
+
+
 def is_meaningful_text(value: str, min_length: int = 2) -> bool:
     cleaned = str(value or "").strip().lower()
     compact = re.sub(r"[^a-z0-9]", "", cleaned)
@@ -1460,6 +1489,33 @@ async def save_feedback(data: FeedbackRequest):
         "insight": data.feedback,
         "timestamp": str(asyncio.get_event_loop().time())
     })
+    return {"status": "saved"}
+
+
+@app.get("/api/history/{user_id}")
+async def get_user_history(user_id: str):
+    """Return persisted account history shared across browsers."""
+    if not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    db = read_history_db()
+    history = db.get(user_id, {})
+    return {
+        "sessions": history.get("sessions", []),
+        "states": history.get("states", {}),
+    }
+
+
+@app.put("/api/history/{user_id}")
+async def save_user_history(user_id: str, payload: HistoryPayload):
+    """Persist account history on the backend so browsers share one source."""
+    if not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    db = read_history_db()
+    db[user_id] = {
+        "sessions": payload.sessions[:10],
+        "states": payload.states,
+    }
+    write_history_db(db)
     return {"status": "saved"}
 
 

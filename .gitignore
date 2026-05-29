@@ -16,3 +16,6 @@ dist/
 
 # Logs
 *.log
+
+# Local app data
+backend/data/

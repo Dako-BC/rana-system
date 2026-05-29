@@ -1,17 +1,29 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { runAgents, continueSession, uploadFile, saveFeedback, clearMemory, getModelAvailability } from './lib/api.js'
+import {
+  runAgents,
+  continueSession,
+  uploadFile,
+  saveFeedback,
+  fetchBackendHistory,
+  saveBackendHistory,
+  clearMemory,
+  getModelAvailability,
+} from './lib/api.js'
 import {
   createAccountWithEmail,
   deleteSessionFromCloud,
+  fetchUserHistory,
   fetchSessionState,
-  fetchUserSessions,
   isFirebaseConfigured,
   saveSessionToCloud,
+  saveUserHistory,
   signInWithEmail,
   signInWithGoogleAccount,
   signOutFirebase,
   subscribeToAuth,
+  subscribeToUserHistory,
+  subscribeToUserSessions,
 } from './lib/firebase.js'
 
 // Helpers.
@@ -46,6 +58,16 @@ const getUserId = () => {
 }
 
 const getSessionListKey = (userId) => `${SESSION_LIST_PREFIX}${userId || 'guest'}`
+const getActiveSessionKey = (userId) => `${SESSION_KEY}:${userId || 'guest'}`
+
+function readActiveSessionId(userId) {
+  return localStorage.getItem(getActiveSessionKey(userId)) || localStorage.getItem(SESSION_KEY)
+}
+
+function writeActiveSessionId(userId, sessionId) {
+  localStorage.setItem(getActiveSessionKey(userId), sessionId)
+  localStorage.setItem(SESSION_KEY, sessionId)
+}
 
 function readSessionList(userId) {
   try {
@@ -64,12 +86,12 @@ function writeSessionList(userId, sessions) {
 }
 
 const getSessionId = (userId) => {
-  const existing = localStorage.getItem(SESSION_KEY)
+  const existing = readActiveSessionId(userId)
   const sessions = readSessionList(userId)
   if (existing && sessions.some(session => session.id === existing)) return existing
 
   const id = sessions[0]?.id || uuidv4()
-  localStorage.setItem(SESSION_KEY, id)
+  writeActiveSessionId(userId, id)
   if (!sessions.length) {
     writeSessionList(userId, [{
       id,
@@ -127,6 +149,28 @@ function getSessionTitle(state) {
   const firstContextLine = String(state?.productContext || '').split('\n').find(Boolean)
   if (firstContextLine) return firstContextLine.replace(/^Product name:\s*/i, '').slice(0, 48)
   return 'New conversation'
+}
+
+function mergeSessions(localSessions, cloudSessions) {
+  const byId = new Map()
+  ;[...localSessions, ...cloudSessions].forEach(session => {
+    if (!session?.id) return
+    const current = byId.get(session.id)
+    if (!current || (session.updatedAt || 0) >= (current.updatedAt || 0)) {
+      byId.set(session.id, session)
+    }
+  })
+  return Array.from(byId.values())
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, MAX_SESSIONS)
+}
+
+function getStatesForSessions(sessions) {
+  return sessions.reduce((states, session) => {
+    const state = readSessionState(session.id)
+    if (state) states[session.id] = state
+    return states
+  }, {})
 }
 
 function getSessionUsage(state) {
@@ -1419,6 +1463,7 @@ function RanaApp({ authUser }) {
   const userId = authUser.uid
   const [sessionList, setSessionList] = useState(() => readSessionList(userId))
   const [sessionId, setSessionId] = useState(() => getSessionId(userId))
+  const sessionIdRef = useRef(sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
   const [showNewChatWarning, setShowNewChatWarning] = useState(false)
   const savedState = useRef(readSessionState(sessionId)).current
@@ -1443,10 +1488,18 @@ function RanaApp({ authUser }) {
   const [showFeedback, setShowFeedback] = useState(Boolean(savedState?.result))
   const [additionalInput, setAdditionalInput] = useState(savedState?.additionalInput || '')
   const [modelAvailability, setModelAvailability] = useState(null)
+  const [historyReady, setHistoryReady] = useState(false)
   const [cloudReady, setCloudReady] = useState(!isFirebaseConfigured)
   const [cloudError, setCloudError] = useState('')
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const fileRef = useRef()
+  const didInitialCloudSync = useRef(false)
+  const didUploadLocalSessions = useRef(false)
+  const skipNextPersist = useRef(false)
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
 
   useEffect(() => {
     setSessionList(readSessionList(userId))
@@ -1472,8 +1525,58 @@ Additional notes: ${wizardForm.catatan}
     setProductContext(buildProductContext())
   }, [wizardForm])
 
+  const persistSession = useCallback((state, options = {}) => {
+    const now = Date.now()
+    writeSessionState(sessionId, state)
+
+    const existing = readSessionList(userId)
+    const current = existing.some(session => session.id === sessionId)
+      ? existing
+      : [{ id: sessionId, createdAt: now, updatedAt: now }, ...existing]
+    const updated = current
+      .map(session => session.id === sessionId
+        ? {
+          ...session,
+          title: session.hasResult ? (session.title || getSessionTitle(state)) : getSessionTitle(state),
+          updatedAt: now,
+          hasResult: Boolean(state.result),
+          usage: getSessionUsage(state),
+        }
+        : session)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_SESSIONS)
+    const currentSession = updated.find(session => session.id === sessionId)
+    writeSessionList(userId, updated)
+    setSessionList(updated)
+
+    const states = getStatesForSessions(updated)
+    states[sessionId] = state
+
+    if (isFirebaseConfigured && currentSession) {
+      saveSessionToCloud(userId, currentSession, state).catch(e => {
+        console.warn('Failed to sync session to Firebase:', e)
+      })
+      saveUserHistory(userId, updated, states).catch(e => {
+        console.warn('Failed to sync account history to Firebase:', e)
+      })
+    }
+
+    return saveBackendHistory(userId, updated, states)
+      .then(() => {
+        if (options.clearCloudError !== false) setCloudError('')
+      })
+      .catch(e => {
+        console.warn('Failed to sync session to backend history:', e)
+        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+      })
+  }, [sessionId, userId])
+
   useEffect(() => {
-    if (loading) return
+    if (loading || !historyReady) return
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false
+      return
+    }
     const state = {
       productContext,
       wizardStep,
@@ -1485,35 +1588,8 @@ Additional notes: ${wizardForm.catatan}
       result,
       additionalInput,
     }
-    writeSessionState(sessionId, state)
-    setSessionList(prev => {
-      const existing = prev.length ? prev : readSessionList(userId)
-      const current = existing.some(session => session.id === sessionId)
-        ? existing
-        : [{ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() }, ...existing]
-      const updated = current
-        .map(session => session.id === sessionId
-          ? {
-            ...session,
-            title: getSessionTitle(state),
-            updatedAt: Date.now(),
-            hasResult: Boolean(result),
-            usage: getSessionUsage(state),
-          }
-          : session)
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, MAX_SESSIONS)
-      writeSessionList(userId, updated)
-      if (cloudReady) {
-        const currentSession = updated.find(session => session.id === sessionId)
-        saveSessionToCloud(userId, currentSession, state).catch(e => {
-          console.warn('Failed to sync session to Firebase:', e)
-          setCloudError('Progress tersimpan lokal, tapi belum berhasil sync ke Firebase.')
-        })
-      }
-      return updated
-    })
-  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading, cloudReady, userId])
+    persistSession(state)
+  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading, userId, historyReady, persistSession])
 
   useEffect(() => {
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
@@ -1549,8 +1625,9 @@ Additional notes: ${wizardForm.catatan}
   const loadSessionState = (nextSessionId) => {
     const nextState = readSessionState(nextSessionId) || getEmptySessionState()
     didHydrateSavedState.current = true
+    skipNextPersist.current = true
     setSessionId(nextSessionId)
-    localStorage.setItem(SESSION_KEY, nextSessionId)
+    writeActiveSessionId(userId, nextSessionId)
     setProductContext(nextState.productContext || '')
     setWizardStep(nextState.wizardStep || 1)
     setWizardForm(nextState.wizardForm || defaultWizardForm)
@@ -1573,15 +1650,72 @@ Additional notes: ${wizardForm.catatan}
   }
 
   useEffect(() => {
+    let cancelled = false
+    let didInitialBackendSync = false
+    setHistoryReady(false)
+
+    const syncBackendHistory = async () => {
+      try {
+        const backendHistory = await fetchBackendHistory(userId)
+        if (cancelled) return
+
+        Object.entries(backendHistory.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+
+        const backendSessions = Array.isArray(backendHistory.sessions) ? backendHistory.sessions : []
+        const localSessions = readSessionList(userId)
+        const usefulLocalSessions = backendSessions.length
+          ? localSessions.filter(session => !isSessionUnusedState(readSessionState(session.id)))
+          : localSessions
+        const mergedSessions = mergeSessions(usefulLocalSessions, backendSessions)
+
+        if (mergedSessions.length) {
+          const activeId = readActiveSessionId(userId)
+          const nextSessionId = mergedSessions.some(session => session.id === activeId)
+            ? activeId
+            : mergedSessions[0].id
+          writeSessionList(userId, mergedSessions)
+          setSessionList(mergedSessions)
+          if (!didInitialBackendSync || !mergedSessions.some(session => session.id === sessionIdRef.current)) {
+            loadSessionState(nextSessionId)
+          }
+          if (!didInitialBackendSync) {
+            await saveBackendHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
+          }
+        }
+        didInitialBackendSync = true
+        setCloudError('')
+      } catch (e) {
+        console.warn('Failed to load backend history:', e)
+        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+      } finally {
+        if (!cancelled) setHistoryReady(true)
+      }
+    }
+
+    syncBackendHistory()
+    const interval = window.setInterval(syncBackendHistory, 4000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [userId])
+
+  useEffect(() => {
     if (!isFirebaseConfigured) return
     let cancelled = false
+    let latestCloudSessions = []
+    let latestHistorySessions = []
 
-    const hydrateFromCloud = async () => {
-      setCloudReady(false)
-      setCloudError('')
+    setCloudReady(false)
+    setCloudError('')
+
+    const syncFromCloud = async () => {
       try {
-        const cloudSessions = await fetchUserSessions(userId, MAX_SESSIONS)
-        if (cancelled) return
+        const localSessions = readSessionList(userId)
+        const cloudSessions = mergeSessions(latestCloudSessions, latestHistorySessions)
 
         if (cloudSessions.length) {
           const states = await Promise.all(
@@ -1592,10 +1726,35 @@ Additional notes: ${wizardForm.catatan}
           states.forEach(([id, state]) => {
             if (state) writeSessionState(id, state)
           })
-          writeSessionList(userId, cloudSessions)
-          setSessionList(cloudSessions)
-          loadSessionState(cloudSessions[0].id)
         }
+
+        const usefulLocalSessions = cloudSessions.length
+          ? localSessions.filter(session => !isSessionUnusedState(readSessionState(session.id)))
+          : localSessions
+        const mergedSessions = mergeSessions(usefulLocalSessions, cloudSessions)
+        if (!didUploadLocalSessions.current) {
+          const cloudSessionIds = new Set(cloudSessions.map(session => session.id))
+          const localOnlySessions = mergedSessions.filter(session => !cloudSessionIds.has(session.id))
+          await Promise.all(localOnlySessions.map(session => {
+            const state = readSessionState(session.id) || getEmptySessionState()
+            return saveSessionToCloud(userId, session, state)
+          }))
+          await saveUserHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
+          didUploadLocalSessions.current = true
+        }
+        if (cancelled) return
+
+        if (mergedSessions.length) {
+          const activeId = readActiveSessionId(userId)
+          const shouldLoadSession = !didInitialCloudSync.current || !mergedSessions.some(session => session.id === sessionIdRef.current)
+          const nextSessionId = mergedSessions.some(session => session.id === activeId)
+            ? activeId
+            : mergedSessions[0].id
+          writeSessionList(userId, mergedSessions)
+          setSessionList(mergedSessions)
+          if (shouldLoadSession) loadSessionState(nextSessionId)
+        }
+        didInitialCloudSync.current = true
       } catch (e) {
         console.warn('Failed to load Firebase sessions:', e)
         if (!cancelled) {
@@ -1606,9 +1765,52 @@ Additional notes: ${wizardForm.catatan}
       }
     }
 
-    hydrateFromCloud()
+    fetchUserHistory(userId)
+      .then(history => {
+        if (cancelled) return
+        latestHistorySessions = history.sessions
+        Object.entries(history.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+        syncFromCloud()
+      })
+      .catch(e => {
+        console.warn('Failed to fetch Firebase history:', e)
+      })
+
+    const unsubscribe = subscribeToUserSessions(
+      userId,
+      MAX_SESSIONS,
+      cloudSessions => {
+        latestCloudSessions = cloudSessions
+        syncFromCloud()
+      },
+      e => {
+        console.warn('Failed to subscribe Firebase sessions:', e)
+        if (!cancelled) {
+          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+          setCloudReady(true)
+        }
+      }
+    )
+    const unsubscribeHistory = subscribeToUserHistory(
+      userId,
+      history => {
+        latestHistorySessions = history.sessions
+        Object.entries(history.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+        syncFromCloud()
+      },
+      e => {
+        console.warn('Failed to subscribe Firebase history:', e)
+      }
+    )
+
     return () => {
       cancelled = true
+      unsubscribe()
+      unsubscribeHistory()
     }
   }, [userId])
 
@@ -1633,7 +1835,9 @@ Additional notes: ${wizardForm.catatan}
     writeSessionList(userId, nextList)
     setSessionList(nextList)
     writeSessionState(nextId, getEmptySessionState())
+    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     saveSessionToCloud(userId, nextList[0], getEmptySessionState()).catch(() => { })
+    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     loadSessionState(nextId)
   }
 
@@ -1762,6 +1966,17 @@ Additional notes: ${wizardForm.catatan}
       ])
       setResult(data)
       setShowFeedback(true)
+      await persistSession({
+        productContext,
+        wizardStep,
+        wizardForm,
+        uploadedFiles,
+        runHagen,
+        provider,
+        model,
+        result: data,
+        additionalInput,
+      })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1791,8 +2006,20 @@ Additional notes: ${wizardForm.catatan}
       ])
       setResult(data)
       setAdditionalInput('')
-      setProductContext(prev => `${prev.trim()}\n\nAdditional input:\n${note}`)
+      const nextProductContext = `${productContext.trim()}\n\nAdditional input:\n${note}`
+      setProductContext(nextProductContext)
       setShowFeedback(true)
+      await persistSession({
+        productContext: nextProductContext,
+        wizardStep,
+        wizardForm,
+        uploadedFiles,
+        runHagen,
+        provider,
+        model,
+        result: data,
+        additionalInput: '',
+      })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1831,6 +2058,8 @@ Additional notes: ${wizardForm.catatan}
         ? { ...session, title: 'New conversation', hasResult: false, usage: 0, updatedAt: Date.now() }
         : session)
       writeSessionList(userId, updated)
+      saveBackendHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
+      saveUserHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
       return updated
     })
   }
@@ -1884,7 +2113,7 @@ Additional notes: ${wizardForm.catatan}
             5 agents
           </span>
           <span style={{ fontSize: 11, color: cloudError ? '#e07070' : 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }} title={cloudError || authUser.email || authUser.uid}>
-            {cloudReady ? (cloudError ? 'local save' : 'cloud save') : 'syncing'}
+            {!historyReady ? 'syncing' : cloudError ? 'sync error' : 'server save'}
           </span>
           <button
             type="button"
@@ -2434,7 +2663,19 @@ Additional notes: ${wizardForm.catatan}
               borderRadius: 'var(--radius-lg)', padding: '28px 30px', minHeight: 420,
             }}>
               <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 22 }}>
-                <div style={{ width: 40, height: 40, borderRadius: '50%', border: '4px solid rgba(196,168,130,0.2)', borderTopColor: 'var(--accent)', animation: 'spin 1s linear infinite' }} />
+                <div style={{
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  minHeight: 40,
+                  aspectRatio: '1 / 1',
+                  flex: '0 0 40px',
+                  borderRadius: '50%',
+                  border: '4px solid rgba(196,168,130,0.2)',
+                  borderTopColor: 'var(--accent)',
+                  boxSizing: 'border-box',
+                  animation: 'spin 1s linear infinite'
+                }} />
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     SYSTEM RUNNING
