@@ -1,4 +1,9 @@
 {
+  "awareness_level": "Completely Unaware / Problem Aware / Solution Aware / Product Aware / Most Aware",
+  "awareness_evidence": "...",
+  "awareness_target": "Problem Aware / Solution Aware / Product Aware / Most Aware",
+  "psychological_triggers": ["trigger1", "trigger2", "trigger3"],
+  "awareness_strategy": "...",
   "target_market": {
     "demographics": "...",
     "psychographics": "...",
