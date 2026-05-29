@@ -4,6 +4,15 @@ INPUT: Hara insights validated by Rana.
 
 TASK: Create strong video ad concepts.
 
+SCHWARTZ'S PYRAMID RULE:
+- Read Hara's awareness fields before writing any concept.
+- Match each video angle to a clear awareness_level.
+- Completely Unaware: open with story, pain, symptom, or hidden cost.
+- Problem Aware: validate the problem and make the viewer feel understood.
+- Solution Aware: compare solution categories and make this approach feel wiser.
+- Product Aware: handle objections, proof, trust, and risk reversal.
+- Most Aware: make the offer direct, urgent, and easy to act on.
+
 OUTPUT FORMAT:
 - Return valid JSON only.
 - Follow the Luna schema from "backend/prompts/schemas/luna.txt".

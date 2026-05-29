@@ -10,4 +10,11 @@ Give the final decision:
 3. What needs human review
 4. Recommended next steps
 
+Final awareness check:
+- Verify that Bombom and Luna outputs match the awareness_level they claim.
+- Prefer concepts that move the audience from Hara's current awareness_level toward the awareness_target.
+- Check whether Bombom's copy is appropriate for awareness_target and flag any mismatch.
+- Flag any concept that uses a Most Aware offer for an Unaware or Problem Aware audience without enough bridge copy.
+- Keep the final recommendation focused on conversion, not content variety alone.
+
 Return valid JSON following the Rana final schema.
