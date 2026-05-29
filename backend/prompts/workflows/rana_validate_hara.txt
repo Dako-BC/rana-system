@@ -5,10 +5,10 @@ Validate the Hara output using the criteria below.
 
 APPROVAL CRITERIA - approve if ALL of the following are true:
 - awareness_level is present and is one of: Completely Unaware, Problem Aware, Solution Aware, Product Aware, Most Aware
-- awareness_evidence explains why that level was chosen and is not empty or generic
+- awareness_evidence is a structured object with source, audience_signal, and why_this_level; it is not empty or generic
 - awareness_target is present and realistic
-- psychological_triggers explains why these people would buy and is specific, not a general description
-- awareness_strategy explains how to move the audience from awareness_level to awareness_target
+- psychological_triggers is an array of structured objects with trigger, why_it_matters, and buying_moment; each trigger is specific, not a general description
+- awareness_strategy is a structured object with current_to_target, copy_direction, landing_page_angle, and follow_up_angle
 - main_pain_point is specific and actionable, not generic
 - decision_trigger is concrete (not "affordable price" or "good quality")
 - at least 2 objection handlings are present
@@ -16,6 +16,7 @@ APPROVAL CRITERIA - approve if ALL of the following are true:
 
 REVISION CRITERIA - request revision if ANY of the following:
 - awareness_level is missing, unclear, invalid, or not backed by evidence
+- awareness_evidence, psychological_triggers, or awareness_strategy are collapsed into generic prose instead of structured fields
 - psychological triggers are generic or not connected to conversion
 - pain point is vague or could apply to any product
 - decision_trigger is a generic marketing cliche

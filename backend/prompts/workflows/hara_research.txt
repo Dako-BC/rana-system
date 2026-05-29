@@ -10,10 +10,12 @@ REQUIRED:
 - Return valid JSON only according to the Hara schema.
 - Diagnose awareness_level first.
 - awareness_level must be one of: Completely Unaware, Problem Aware, Solution Aware, Product Aware, Most Aware.
-- awareness_evidence must explain why that level was chosen. Use provided data, previous winning copy, or clearly marked assumptions.
-- Define awareness_target and the psychological_triggers that explain why this audience would buy.
-- Define awareness_strategy for moving the audience from awareness_level to awareness_target.
+- awareness_evidence must be an object with source, audience_signal, and why_this_level. Use provided data, previous winning copy, or clearly marked assumptions.
+- Define awareness_target.
+- psychological_triggers must be an array of objects with trigger, why_it_matters, and buying_moment.
+- awareness_strategy must be an object with current_to_target, copy_direction, landing_page_angle, and follow_up_angle.
 - Make the research useful for conversion: product-market fit, curiosity, urgency, landing page angle, and follow-up angle.
+- Do not output awareness_evidence, psychological_triggers, or awareness_strategy as a single paragraph.
 - Do not use markdown, headings, or code fences.
 - If data is missing, do not stop at clarification questions only.
 - Still provide best-effort analysis, put assumptions in "assumptions_used", and put questions in "clarification_questions".

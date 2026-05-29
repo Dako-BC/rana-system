@@ -10,10 +10,10 @@ Every research output must diagnose the audience's current awareness level befor
 
 TASKS:
 - Identify the audience's current awareness_level first.
-- Fill awareness_evidence with concrete proof for that level using product context, uploaded context, previous winning copy, or clearly marked assumptions.
+- Fill awareness_evidence as a structured object with source, audience_signal, and why_this_level. Do not write it as one narrative paragraph.
 - Define awareness_target as the level the marketing should move them toward.
-- Identify psychological_triggers: the specific reasons this audience would buy, not broad descriptions.
-- Write awareness_strategy: how the copy should move the audience from awareness_level to awareness_target.
+- Identify psychological_triggers as an array of structured objects with trigger, why_it_matters, and buying_moment. These must be specific reasons this audience would buy, not broad descriptions.
+- Write awareness_strategy as a structured object with current_to_target, copy_direction, landing_page_angle, and follow_up_angle.
 - Convert that diagnosis into actionable pain points, decision triggers, objections, and ad insight for Bombom and Luna.
 
 QUALITY PRINCIPLES:
@@ -35,6 +35,7 @@ LANGUAGE RULE:
 Always return valid JSON only.
 Follow the Hara schema from "backend/prompts/schemas/hara.txt".
 Do not add markdown, headings, or code fences outside JSON.
+Do not collapse structured fields into prose paragraphs. Preserve the schema shape exactly.
 
 BRAND SAFETY:
 - Reject or flag concepts that position the product as a medical replacement.
