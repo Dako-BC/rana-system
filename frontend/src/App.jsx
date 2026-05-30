@@ -1492,6 +1492,7 @@ function RanaApp({ authUser }) {
   const [cloudReady, setCloudReady] = useState(!isFirebaseConfigured)
   const [cloudError, setCloudError] = useState('')
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const fileRef = useRef()
   const didInitialCloudSync = useRef(false)
   const didUploadLocalSessions = useRef(false)
@@ -1861,6 +1862,51 @@ Additional notes: ${wizardForm.catatan}
     loadSessionState(nextSessionId)
   }
 
+  const handleAskDeleteSession = (session) => {
+    if (loading) return
+    setDeleteTarget(session)
+  }
+
+  const handleConfirmDeleteSession = async () => {
+    if (!deleteTarget || loading) return
+    const deletingActiveSession = deleteTarget.id === sessionId
+    const nextList = sessionList.filter(session => session.id !== deleteTarget.id)
+
+    clearSessionState(deleteTarget.id)
+    clearMemory(deleteTarget.id, userId).catch(() => { })
+    deleteSessionFromCloud(userId, deleteTarget.id).catch(() => { })
+
+    writeSessionList(userId, nextList)
+    setSessionList(nextList)
+    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    setDeleteTarget(null)
+
+    if (deletingActiveSession) {
+      if (nextList.length) {
+        loadSessionState(nextList[0].id)
+      } else {
+        const nextId = uuidv4()
+        const emptySession = {
+          id: nextId,
+          title: 'New conversation',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          hasResult: false,
+          usage: 0,
+        }
+        writeSessionList(userId, [emptySession])
+        writeSessionState(nextId, getEmptySessionState())
+        setSessionList([emptySession])
+        saveBackendHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
+        saveSessionToCloud(userId, emptySession, getEmptySessionState()).catch(() => { })
+        saveUserHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
+        loadSessionState(nextId)
+        if (window.innerWidth > 980) setSidebarOpen(true)
+      }
+    }
+  }
+
   const getExportText = () => {
     const parts = []
     if (result?.hara_output) parts.push('Hara - Market research & insight:\n' + result.hara_output)
@@ -2206,6 +2252,40 @@ Additional notes: ${wizardForm.catatan}
         </div>
       )}
 
+      {deleteTarget && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setDeleteTarget(null)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-history-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">Delete history</div>
+            <h2 id="delete-history-title">Hapus history ini?</h2>
+            <p>
+              History "{deleteTarget.title || 'New conversation'}" akan dihapus dari akun ini dan tidak bisa dikembalikan.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleConfirmDeleteSession}
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <aside className={`history-sidebar ${sidebarOpen ? 'open' : ''}`} aria-label="Chat history">
         <div className="history-sidebar-head">
           <div>
@@ -2227,18 +2307,32 @@ Additional notes: ${wizardForm.catatan}
 
         <div className="history-list">
           {sessionList.map(session => (
-            <button
+            <div
               key={session.id}
-              type="button"
-              onClick={() => handleSelectSession(session.id)}
-              className={`history-item ${session.id === sessionId ? 'active' : ''}`}
-              disabled={loading}
+              className={`history-item-row ${session.id === sessionId ? 'active' : ''}`}
             >
-              <span className="history-item-title">{session.title || 'New conversation'}</span>
-              <span className="history-item-meta">
-                {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSession(session.id)}
+                className="history-item"
+                disabled={loading}
+              >
+                <span className="history-item-title">{session.title || 'New conversation'}</span>
+                <span className="history-item-meta">
+                  {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
+                </span>
+              </button>
+              <button
+                type="button"
+                className="history-delete-btn"
+                onClick={() => handleAskDeleteSession(session)}
+                disabled={loading}
+                aria-label={`Delete ${session.title || 'New conversation'}`}
+                title="Delete history"
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
 
