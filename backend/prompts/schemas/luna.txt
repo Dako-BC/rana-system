@@ -1,0 +1,25 @@
+{
+  "video_concepts": [
+    {
+      "number": 1,
+      "awareness_level": "Completely Unaware / Problem Aware / Solution Aware / Product Aware / Most Aware",
+      "awareness_strategy": "...",
+      "content_angle": "...",
+      "hook_scene": {
+        "duration": "0-3 seconds",
+        "description": "...",
+        "dialogue_or_text": "...",
+        "visual": "..."
+      },
+      "body_scenes": [
+        {"scene": "Scene 2", "duration": "3-10 seconds", "scene_text": "...", "visual": "..."}
+      ],
+      "production_requirements": {
+        "talent": "...",
+        "location": "...",
+        "props": "...",
+        "estimated_total_duration": "..."
+      }
+    }
+  ]
+}

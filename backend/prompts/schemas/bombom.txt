@@ -1,0 +1,15 @@
+{
+  "ad_concepts": [
+    {
+      "number": 1,
+      "awareness_level": "Completely Unaware / Problem Aware / Solution Aware / Product Aware / Most Aware",
+      "awareness_strategy": "...",
+      "psychological_trigger": "...",
+      "visual_idea": "...",
+      "hook": "...",
+      "primary_text": "...",
+      "headline": "..."
+    }
+  ],
+  "production_notes": "..."
+}

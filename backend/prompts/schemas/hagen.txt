@@ -1,0 +1,16 @@
+{
+  "script_breakdown": [
+    {
+      "scene_number": 1,
+      "duration": "...",
+      "visual_direction": "...",
+      "dialog": "...",
+      "on_screen_text": "...",
+      "audio": "...",
+      "director_notes": "...",
+      "reusable": true
+    }
+  ],
+  "heygen_notes": "...",
+  "production_checklist": ["item1", "item2"]
+}

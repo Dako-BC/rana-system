@@ -1,0 +1,44 @@
+{
+  "awareness_level": "Completely Unaware / Problem Aware / Solution Aware / Product Aware / Most Aware",
+  "awareness_evidence": {
+    "source": "product_context / uploaded_file / previous_winning_copy / assumption",
+    "audience_signal": "...",
+    "why_this_level": "..."
+  },
+  "awareness_target": "Problem Aware / Solution Aware / Product Aware / Most Aware",
+  "psychological_triggers": [
+    {
+      "trigger": "...",
+      "why_it_matters": "...",
+      "buying_moment": "..."
+    }
+  ],
+  "awareness_strategy": {
+    "current_to_target": "...",
+    "copy_direction": "...",
+    "landing_page_angle": "...",
+    "follow_up_angle": "..."
+  },
+  "target_market": {
+    "demographics": "...",
+    "psychographics": "...",
+    "fb_interest_targeting": ["interest1", "interest2", "interest3"]
+  },
+  "core_problem": {
+    "main_pain_point": "...",
+    "problem_logic": "..."
+  },
+  "decision_trigger": {
+    "trigger": "...",
+    "explanation": "..."
+  },
+  "faq": [
+    {"question": "...", "answer": "..."}
+  ],
+  "objection": [
+    {"objection": "...", "handling": "..."}
+  ],
+  "ad_insight": "...",
+  "assumptions_used": ["..."],
+  "clarification_questions": ["..."]
+}

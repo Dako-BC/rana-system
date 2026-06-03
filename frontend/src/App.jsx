@@ -1,13 +1,106 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { runAgents, continueSession, uploadFile, saveFeedback, clearMemory, getModelAvailability } from './lib/api.js'
+import {
+  runAgents,
+  continueSession,
+  uploadFile,
+  saveFeedback,
+  fetchBackendHistory,
+  saveBackendHistory,
+  clearMemory,
+  getModelAvailability,
+} from './lib/api.js'
+import {
+  createAccountWithEmail,
+  deleteSessionFromCloud,
+  fetchUserHistory,
+  fetchSessionState,
+  isFirebaseConfigured,
+  saveSessionToCloud,
+  saveUserHistory,
+  signInWithEmail,
+  signInWithGoogleAccount,
+  signOutFirebase,
+  subscribeToAuth,
+  subscribeToUserHistory,
+  subscribeToUserSessions,
+} from './lib/firebase.js'
 
 // Helpers.
 const SESSION_KEY = 'rana_session_id'
+const USER_KEY = 'rana_guest_user_id'
+const SESSION_LIST_PREFIX = 'rana_session_list:'
 const SESSION_STATE_PREFIX = 'rana_session_state:'
-const getSessionId = () => {
-  let id = localStorage.getItem(SESSION_KEY)
-  if (!id) { id = uuidv4(); localStorage.setItem(SESSION_KEY, id) }
+const POST_REGISTER_LOGOUT_KEY = 'rana_post_register_logout'
+const POST_REGISTER_NOTICE_KEY = 'rana_post_register_notice'
+const MAX_SESSIONS = 3
+const MAX_SESSION_CHARS = 18000
+const SESSION_WARNING_CHARS = 13000
+const defaultWizardForm = {
+  namaProduk: '',
+  kategori: '',
+  keunggulan: '',
+  targetAudience: '',
+  painPoint: '',
+  harga: '',
+  platform: [],
+  kompetitor: '',
+  catatan: ''
+}
+
+const getUserId = () => {
+  let id = localStorage.getItem(USER_KEY)
+  if (!id) {
+    id = `guest_${uuidv4()}`
+    localStorage.setItem(USER_KEY, id)
+  }
+  return id
+}
+
+const getSessionListKey = (userId) => `${SESSION_LIST_PREFIX}${userId || 'guest'}`
+const getActiveSessionKey = (userId) => `${SESSION_KEY}:${userId || 'guest'}`
+
+function readActiveSessionId(userId) {
+  return localStorage.getItem(getActiveSessionKey(userId)) || localStorage.getItem(SESSION_KEY)
+}
+
+function writeActiveSessionId(userId, sessionId) {
+  localStorage.setItem(getActiveSessionKey(userId), sessionId)
+  localStorage.setItem(SESSION_KEY, sessionId)
+}
+
+function readSessionList(userId) {
+  try {
+    const raw = localStorage.getItem(getSessionListKey(userId))
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeSessionList(userId, sessions) {
+  try {
+    localStorage.setItem(getSessionListKey(userId), JSON.stringify(sessions.slice(0, MAX_SESSIONS)))
+  } catch { }
+}
+
+const getSessionId = (userId) => {
+  const existing = readActiveSessionId(userId)
+  const sessions = readSessionList(userId)
+  if (existing && sessions.some(session => session.id === existing)) return existing
+
+  const id = sessions[0]?.id || uuidv4()
+  writeActiveSessionId(userId, id)
+  if (!sessions.length) {
+    writeSessionList(userId, [{
+      id,
+      title: 'New conversation',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasResult: false,
+    }])
+  }
   return id
 }
 
@@ -34,6 +127,83 @@ function clearSessionState(sessionId) {
   try {
     localStorage.removeItem(getSessionStateKey(sessionId))
   } catch { }
+}
+
+function getEmptySessionState() {
+  return {
+    productContext: '',
+    wizardStep: 1,
+    wizardForm: defaultWizardForm,
+    uploadedFiles: [],
+    runHagen: false,
+    provider: DEFAULT_PROVIDER,
+    model: getDefaultModel(DEFAULT_PROVIDER),
+    result: null,
+    additionalInput: '',
+  }
+}
+
+function getSessionTitle(state) {
+  const productName = state?.wizardForm?.namaProduk?.trim()
+  if (productName) return productName.slice(0, 48)
+  const firstContextLine = String(state?.productContext || '').split('\n').find(Boolean)
+  if (firstContextLine) return firstContextLine.replace(/^Product name:\s*/i, '').slice(0, 48)
+  return 'New conversation'
+}
+
+function mergeSessions(localSessions, cloudSessions) {
+  const byId = new Map()
+  ;[...localSessions, ...cloudSessions].forEach(session => {
+    if (!session?.id) return
+    const current = byId.get(session.id)
+    if (!current || (session.updatedAt || 0) >= (current.updatedAt || 0)) {
+      byId.set(session.id, session)
+    }
+  })
+  return Array.from(byId.values())
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, MAX_SESSIONS)
+}
+
+function getStatesForSessions(sessions) {
+  return sessions.reduce((states, session) => {
+    const state = readSessionState(session.id)
+    if (state) states[session.id] = state
+    return states
+  }, {})
+}
+
+function getSessionUsage(state) {
+  const payload = [
+    state?.productContext,
+    state?.additionalInput,
+    state?.result?.hara_output,
+    state?.result?.bombom_output,
+    state?.result?.luna_output,
+    state?.result?.hagen_output,
+    state?.result?.rana_decision,
+  ].filter(Boolean).join('\n')
+  return payload.length
+}
+
+function isSessionUnusedState(state) {
+  if (!state) return true
+  if (state.result) return false
+  if ((state.uploadedFiles || []).length > 0) return false
+  if (getMeaningfulLength(state.additionalInput) > 0) return false
+  const form = state.wizardForm || {}
+  const formText = [
+    form.namaProduk,
+    form.kategori,
+    form.keunggulan,
+    form.targetAudience,
+    form.painPoint,
+    form.harga,
+    form.kompetitor,
+    form.catatan,
+    ...(form.platform || []),
+  ].join(' ')
+  return getMeaningfulLength(formText) === 0
 }
 
 function tryParseJson(str) {
@@ -97,13 +267,28 @@ function getFriendlyErrorMessage(error) {
   if (/network|fetch|failed to fetch/.test(normalized)) {
     return 'Unable to connect to the system. Make sure your internet connection is stable, then try again.'
   }
-  if (/502|ai service|anthropic|bad gateway/.test(normalized)) {
-    return 'Backend is running, but the AI service request failed. Check the backend terminal for the Anthropic error detail, API key, quota, or rate limit.'
+  if (/502|ai service|bad gateway|openrouter|anthropic|openai|gemini|grok|groq/.test(normalized)) {
+    return 'The AI service request failed. Check the backend terminal for error details, API key configuration, quota, or rate limit.'
   }
   if (/api/.test(normalized)) {
     return 'There is a configuration issue. Contact the technical team.'
   }
   return 'An error occurred. Try running again — if it still fails, reset the session and start over.'
+}
+
+function InlineMarkdown({ text, style }) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g)
+  return (
+    <span style={style}>
+      {parts.map((part, index) => {
+        const boldMatch = part.match(/^\*\*([^*]+)\*\*$/)
+        if (boldMatch) {
+          return <strong key={index} style={{ color: 'var(--text)' }}>{boldMatch[1]}</strong>
+        }
+        return <span key={index}>{part}</span>
+      })}
+    </span>
+  )
 }
 
 function SummaryView({ data }) {
@@ -155,7 +340,7 @@ const AGENTS = {
   hara: { name: 'Hara', role: 'Research', color: '#82c4a0', icon: '◎' },
   bombom: { name: 'Bombom', role: 'Image Ads', color: '#c48282', icon: '▣' },
   luna: { name: 'Luna', role: 'Video Concept', color: '#8299c4', icon: '◐' },
-  hagen: { name: 'Hagen', role: 'Eksekusi', color: '#c4b082', icon: '▷' },
+  hagen: { name: 'Hagen', role: 'Execution', color: '#c4b082', icon: '▷' },
 }
 
 const PROVIDER_LABELS = {
@@ -163,6 +348,8 @@ const PROVIDER_LABELS = {
   grok: 'Grok',
   openai: 'OpenAI',
   gemini: 'Gemini',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
 }
 
 const PROVIDER_MODELS = {
@@ -183,6 +370,18 @@ const PROVIDER_MODELS = {
   gemini: [
     'gemini-1.5-flash',
     'gemini-1.5-pro',
+  ],
+  openrouter: [
+    'openai/gpt-oss-120b:free',
+    'deepseek/deepseek-chat-v3-0324',
+    'qwen/qwen3-32b',
+    'mistralai/mistral-small-3.1-24b-instruct',
+    'openai/gpt-4o-mini',
+  ],
+  groq: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
   ],
 }
 
@@ -285,7 +484,7 @@ function OutputCard({ agentKey, content, title }) {
       if (!hasHaraData) return <SummaryView data={parsed} />
 
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="hara-output" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
           {/* Target Market */}
           {(tm.demographics || tm.psychographics || tm.fb_interest_targeting?.length) && (
@@ -880,9 +1079,7 @@ function OutputCard({ agentKey, content, title }) {
                   return (
                     <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '3px 0' }}>
                       <span style={{ color: a.color, fontSize: 14, lineHeight: 1.4, flexShrink: 0 }}>•</span>
-                      <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}
-                        dangerouslySetInnerHTML={{ __html: text.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                      />
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
                     </div>
                   )
                 }
@@ -894,9 +1091,7 @@ function OutputCard({ agentKey, content, title }) {
                   return (
                     <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '3px 0' }}>
                       <span style={{ color: a.color, fontWeight: 700, fontSize: 12, flexShrink: 0, minWidth: 18 }}>{num}.</span>
-                      <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}
-                        dangerouslySetInnerHTML={{ __html: text.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                      />
+                      <InlineMarkdown text={text} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }} />
                     </div>
                   )
                 }
@@ -908,9 +1103,9 @@ function OutputCard({ agentKey, content, title }) {
 
                 // Render plain paragraphs.
                 return (
-                  <p key={i} style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}
-                    dangerouslySetInnerHTML={{ __html: trimmed.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--text)">$1</strong>') }}
-                  />
+                  <p key={i} style={{ margin: 0 }}>
+                    <InlineMarkdown text={trimmed} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }} />
+                  </p>
                 )
               })}
             </div>
@@ -1089,13 +1284,13 @@ function RanaDecisionCard({ content }) {
   )
 }
 
-function FeedbackBar({ sessionId, onDone }) {
+function FeedbackBar({ sessionId, userId, onDone }) {
   const [feedback, setFeedback] = useState('')
   const [sent, setSent] = useState(false)
 
   const send = async () => {
     if (!feedback.trim()) return
-    await saveFeedback(sessionId, feedback)
+    await saveFeedback(sessionId, feedback, userId)
     setSent(true)
     onDone?.()
   }
@@ -1140,22 +1335,139 @@ function FeedbackBar({ sessionId, onDone }) {
   )
 }
 
+function LoginView() {
+  const [mode, setMode] = useState('login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState(() => {
+    const savedNotice = sessionStorage.getItem(POST_REGISTER_NOTICE_KEY) || ''
+    sessionStorage.removeItem(POST_REGISTER_NOTICE_KEY)
+    return savedNotice
+  })
+  const isRegister = mode === 'register'
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      if (isRegister) {
+        sessionStorage.setItem(POST_REGISTER_LOGOUT_KEY, '1')
+        sessionStorage.setItem(POST_REGISTER_NOTICE_KEY, 'Register selesai. Silakan login dengan akun yang baru dibuat.')
+        await createAccountWithEmail({ name, email, password })
+      } else {
+        await signInWithEmail(email, password)
+      }
+    } catch (e) {
+      sessionStorage.removeItem(POST_REGISTER_LOGOUT_KEY)
+      sessionStorage.removeItem(POST_REGISTER_NOTICE_KEY)
+      setError(e.message || 'Login failed. Check your account and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGoogle = async () => {
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      await signInWithGoogleAccount()
+    } catch (e) {
+      setError(e.message || 'Google login failed. Try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-mark">R</div>
+          <div>
+            <h1>Rana</h1>
+            <p>Marketing system</p>
+          </div>
+        </div>
+
+        {!isFirebaseConfigured ? (
+          <div className="login-error">
+            Firebase belum dikonfigurasi. Isi file <code>.env</code> dari <code>.env.example</code>, lalu restart Vite.
+          </div>
+        ) : (
+          <>
+            <div className="login-tabs" role="tablist" aria-label="Authentication mode">
+              <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError('') }}>
+                Login
+              </button>
+              <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); setNotice('') }}>
+                Register
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="login-form">
+              {isRegister && (
+                <label>
+                  Name
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Nama akun" autoComplete="name" />
+                </label>
+              )}
+              <label>
+                Email
+                <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="email@example.com" autoComplete="email" required />
+              </label>
+              <label>
+                Password
+                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Minimal 6 karakter" autoComplete={isRegister ? 'new-password' : 'current-password'} required />
+              </label>
+              {notice && <div className="login-notice">{notice}</div>}
+              {error && <div className="login-error">{error}</div>}
+              <button type="submit" className="login-primary" disabled={loading}>
+                {loading ? 'Please wait...' : isRegister ? 'Create account' : 'Login'}
+              </button>
+            </form>
+
+            <button type="button" className="login-google" onClick={handleGoogle} disabled={loading}>
+              Continue with Google
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AuthLoadingView() {
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-mark">R</div>
+          <div>
+            <h1>Rana</h1>
+            <p>Loading account...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Main app.
-export default function App() {
-  const sessionId = useRef(getSessionId()).current
+function RanaApp({ authUser }) {
+  const userId = authUser.uid
+  const [sessionList, setSessionList] = useState(() => readSessionList(userId))
+  const [sessionId, setSessionId] = useState(() => getSessionId(userId))
+  const sessionIdRef = useRef(sessionId)
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
+  const [showNewChatWarning, setShowNewChatWarning] = useState(false)
   const savedState = useRef(readSessionState(sessionId)).current
   const didHydrateSavedState = useRef(Boolean(savedState))
-  const defaultWizardForm = {
-    namaProduk: '',
-    kategori: '',
-    keunggulan: '',
-    targetAudience: '',
-    painPoint: '',
-    harga: '',
-    platform: [],
-    kompetitor: '',
-    catatan: ''
-  }
   const [productContext, setProductContext] = useState(savedState?.productContext || '')
   const [wizardStep, setWizardStep] = useState(savedState?.wizardStep || 1)
   const [wizardForm, setWizardForm] = useState(savedState?.wizardForm || defaultWizardForm)
@@ -1176,7 +1488,23 @@ export default function App() {
   const [showFeedback, setShowFeedback] = useState(Boolean(savedState?.result))
   const [additionalInput, setAdditionalInput] = useState(savedState?.additionalInput || '')
   const [modelAvailability, setModelAvailability] = useState(null)
+  const [historyReady, setHistoryReady] = useState(false)
+  const [cloudReady, setCloudReady] = useState(!isFirebaseConfigured)
+  const [cloudError, setCloudError] = useState('')
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const fileRef = useRef()
+  const didInitialCloudSync = useRef(false)
+  const didUploadLocalSessions = useRef(false)
+  const skipNextPersist = useRef(false)
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
+
+  useEffect(() => {
+    setSessionList(readSessionList(userId))
+  }, [userId])
 
   const buildProductContext = () => `
 Product name: ${wizardForm.namaProduk}
@@ -1198,9 +1526,59 @@ Additional notes: ${wizardForm.catatan}
     setProductContext(buildProductContext())
   }, [wizardForm])
 
+  const persistSession = useCallback((state, options = {}) => {
+    const now = Date.now()
+    writeSessionState(sessionId, state)
+
+    const existing = readSessionList(userId)
+    const current = existing.some(session => session.id === sessionId)
+      ? existing
+      : [{ id: sessionId, createdAt: now, updatedAt: now }, ...existing]
+    const updated = current
+      .map(session => session.id === sessionId
+        ? {
+          ...session,
+          title: session.hasResult ? (session.title || getSessionTitle(state)) : getSessionTitle(state),
+          updatedAt: now,
+          hasResult: Boolean(state.result),
+          usage: getSessionUsage(state),
+        }
+        : session)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_SESSIONS)
+    const currentSession = updated.find(session => session.id === sessionId)
+    writeSessionList(userId, updated)
+    setSessionList(updated)
+
+    const states = getStatesForSessions(updated)
+    states[sessionId] = state
+
+    if (isFirebaseConfigured && currentSession) {
+      saveSessionToCloud(userId, currentSession, state).catch(e => {
+        console.warn('Failed to sync session to Firebase:', e)
+      })
+      saveUserHistory(userId, updated, states).catch(e => {
+        console.warn('Failed to sync account history to Firebase:', e)
+      })
+    }
+
+    return saveBackendHistory(userId, updated, states)
+      .then(() => {
+        if (options.clearCloudError !== false) setCloudError('')
+      })
+      .catch(e => {
+        console.warn('Failed to sync session to backend history:', e)
+        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+      })
+  }, [sessionId, userId])
+
   useEffect(() => {
-    if (loading) return
-    writeSessionState(sessionId, {
+    if (loading || !historyReady) return
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false
+      return
+    }
+    const state = {
       productContext,
       wizardStep,
       wizardForm,
@@ -1210,8 +1588,9 @@ Additional notes: ${wizardForm.catatan}
       model,
       result,
       additionalInput,
-    })
-  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading])
+    }
+    persistSession(state)
+  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading, userId, historyReady, persistSession])
 
   useEffect(() => {
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
@@ -1242,6 +1621,290 @@ Additional notes: ${wizardForm.catatan}
         ? prev.platform.filter(item => item !== platform)
         : [...prev.platform, platform]
     }))
+  }
+
+  const loadSessionState = (nextSessionId) => {
+    const nextState = readSessionState(nextSessionId) || getEmptySessionState()
+    didHydrateSavedState.current = true
+    skipNextPersist.current = true
+    setSessionId(nextSessionId)
+    writeActiveSessionId(userId, nextSessionId)
+    setProductContext(nextState.productContext || '')
+    setWizardStep(nextState.wizardStep || 1)
+    setWizardForm(nextState.wizardForm || defaultWizardForm)
+    setUploadedFiles(nextState.uploadedFiles || [])
+    setRunHagen(nextState.runHagen || false)
+    const nextProvider = nextState.provider || DEFAULT_PROVIDER
+    setProvider(nextProvider)
+    setModel(
+      nextState.model && PROVIDER_MODELS[nextProvider]?.includes(nextState.model)
+        ? nextState.model
+        : getDefaultModel(nextProvider)
+    )
+    setResult(nextState.result || null)
+    setAdditionalInput(nextState.additionalInput || '')
+    setShowFeedback(Boolean(nextState.result))
+    setCompletedSteps([])
+    setCurrentStep(null)
+    setError(null)
+    if (window.innerWidth <= 980) setSidebarOpen(false)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    let didInitialBackendSync = false
+    setHistoryReady(false)
+
+    const syncBackendHistory = async () => {
+      try {
+        const backendHistory = await fetchBackendHistory(userId)
+        if (cancelled) return
+
+        Object.entries(backendHistory.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+
+        const backendSessions = Array.isArray(backendHistory.sessions) ? backendHistory.sessions : []
+        const localSessions = readSessionList(userId)
+        const usefulLocalSessions = backendSessions.length
+          ? localSessions.filter(session => !isSessionUnusedState(readSessionState(session.id)))
+          : localSessions
+        const mergedSessions = mergeSessions(usefulLocalSessions, backendSessions)
+
+        if (mergedSessions.length) {
+          const activeId = readActiveSessionId(userId)
+          const nextSessionId = mergedSessions.some(session => session.id === activeId)
+            ? activeId
+            : mergedSessions[0].id
+          writeSessionList(userId, mergedSessions)
+          setSessionList(mergedSessions)
+          if (!didInitialBackendSync || !mergedSessions.some(session => session.id === sessionIdRef.current)) {
+            loadSessionState(nextSessionId)
+          }
+          if (!didInitialBackendSync) {
+            await saveBackendHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
+          }
+        }
+        didInitialBackendSync = true
+        setCloudError('')
+      } catch (e) {
+        console.warn('Failed to load backend history:', e)
+        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+      } finally {
+        if (!cancelled) setHistoryReady(true)
+      }
+    }
+
+    syncBackendHistory()
+    const interval = window.setInterval(syncBackendHistory, 4000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [userId])
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) return
+    let cancelled = false
+    let latestCloudSessions = []
+    let latestHistorySessions = []
+
+    setCloudReady(false)
+    setCloudError('')
+
+    const syncFromCloud = async () => {
+      try {
+        const localSessions = readSessionList(userId)
+        const cloudSessions = mergeSessions(latestCloudSessions, latestHistorySessions)
+
+        if (cloudSessions.length) {
+          const states = await Promise.all(
+            cloudSessions.map(async session => [session.id, await fetchSessionState(userId, session.id)])
+          )
+          if (cancelled) return
+
+          states.forEach(([id, state]) => {
+            if (state) writeSessionState(id, state)
+          })
+        }
+
+        const usefulLocalSessions = cloudSessions.length
+          ? localSessions.filter(session => !isSessionUnusedState(readSessionState(session.id)))
+          : localSessions
+        const mergedSessions = mergeSessions(usefulLocalSessions, cloudSessions)
+        if (!didUploadLocalSessions.current) {
+          const cloudSessionIds = new Set(cloudSessions.map(session => session.id))
+          const localOnlySessions = mergedSessions.filter(session => !cloudSessionIds.has(session.id))
+          await Promise.all(localOnlySessions.map(session => {
+            const state = readSessionState(session.id) || getEmptySessionState()
+            return saveSessionToCloud(userId, session, state)
+          }))
+          await saveUserHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
+          didUploadLocalSessions.current = true
+        }
+        if (cancelled) return
+
+        if (mergedSessions.length) {
+          const activeId = readActiveSessionId(userId)
+          const shouldLoadSession = !didInitialCloudSync.current || !mergedSessions.some(session => session.id === sessionIdRef.current)
+          const nextSessionId = mergedSessions.some(session => session.id === activeId)
+            ? activeId
+            : mergedSessions[0].id
+          writeSessionList(userId, mergedSessions)
+          setSessionList(mergedSessions)
+          if (shouldLoadSession) loadSessionState(nextSessionId)
+        }
+        didInitialCloudSync.current = true
+      } catch (e) {
+        console.warn('Failed to load Firebase sessions:', e)
+        if (!cancelled) {
+          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+        }
+      } finally {
+        if (!cancelled) setCloudReady(true)
+      }
+    }
+
+    fetchUserHistory(userId)
+      .then(history => {
+        if (cancelled) return
+        latestHistorySessions = history.sessions
+        Object.entries(history.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+        syncFromCloud()
+      })
+      .catch(e => {
+        console.warn('Failed to fetch Firebase history:', e)
+      })
+
+    const unsubscribe = subscribeToUserSessions(
+      userId,
+      MAX_SESSIONS,
+      cloudSessions => {
+        latestCloudSessions = cloudSessions
+        syncFromCloud()
+      },
+      e => {
+        console.warn('Failed to subscribe Firebase sessions:', e)
+        if (!cancelled) {
+          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+          setCloudReady(true)
+        }
+      }
+    )
+    const unsubscribeHistory = subscribeToUserHistory(
+      userId,
+      history => {
+        latestHistorySessions = history.sessions
+        Object.entries(history.states || {}).forEach(([id, state]) => {
+          if (state) writeSessionState(id, state)
+        })
+        syncFromCloud()
+      },
+      e => {
+        console.warn('Failed to subscribe Firebase history:', e)
+      }
+    )
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+      unsubscribeHistory()
+    }
+  }, [userId])
+
+  const createNewSession = async () => {
+    const existing = readSessionList(userId)
+    const nextId = uuidv4()
+    const now = Date.now()
+    const evicted = [...existing, { id: nextId, updatedAt: now }]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(MAX_SESSIONS)
+
+    evicted.forEach(session => {
+      clearSessionState(session.id)
+      clearMemory(session.id, userId).catch(() => { })
+      deleteSessionFromCloud(userId, session.id).catch(() => { })
+    })
+
+    const nextList = [
+      { id: nextId, title: 'New conversation', createdAt: now, updatedAt: now, hasResult: false, usage: 0 },
+      ...existing.filter(session => !evicted.some(old => old.id === session.id)),
+    ].slice(0, MAX_SESSIONS)
+    writeSessionList(userId, nextList)
+    setSessionList(nextList)
+    writeSessionState(nextId, getEmptySessionState())
+    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    saveSessionToCloud(userId, nextList[0], getEmptySessionState()).catch(() => { })
+    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    loadSessionState(nextId)
+  }
+
+  const handleNewSession = async () => {
+    if (loading || newChatDisabled) return
+    const existing = readSessionList(userId)
+    if (existing.length >= MAX_SESSIONS) {
+      setShowNewChatWarning(true)
+      return
+    }
+    await createNewSession()
+  }
+
+  const handleConfirmNewSession = async () => {
+    setShowNewChatWarning(false)
+    await createNewSession()
+  }
+
+  const handleSelectSession = (nextSessionId) => {
+    if (loading || nextSessionId === sessionId) return
+    loadSessionState(nextSessionId)
+  }
+
+  const handleAskDeleteSession = (session) => {
+    if (loading) return
+    setDeleteTarget(session)
+  }
+
+  const handleConfirmDeleteSession = async () => {
+    if (!deleteTarget || loading) return
+    const deletingActiveSession = deleteTarget.id === sessionId
+    const nextList = sessionList.filter(session => session.id !== deleteTarget.id)
+
+    clearSessionState(deleteTarget.id)
+    clearMemory(deleteTarget.id, userId).catch(() => { })
+    deleteSessionFromCloud(userId, deleteTarget.id).catch(() => { })
+
+    writeSessionList(userId, nextList)
+    setSessionList(nextList)
+    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    setDeleteTarget(null)
+
+    if (deletingActiveSession) {
+      if (nextList.length) {
+        loadSessionState(nextList[0].id)
+      } else {
+        const nextId = uuidv4()
+        const emptySession = {
+          id: nextId,
+          title: 'New conversation',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          hasResult: false,
+          usage: 0,
+        }
+        writeSessionList(userId, [emptySession])
+        writeSessionState(nextId, getEmptySessionState())
+        setSessionList([emptySession])
+        saveBackendHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
+        saveSessionToCloud(userId, emptySession, getEmptySessionState()).catch(() => { })
+        saveUserHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
+        loadSessionState(nextId)
+        if (window.innerWidth > 980) setSidebarOpen(true)
+      }
+    }
   }
 
   const getExportText = () => {
@@ -1296,17 +1959,25 @@ Additional notes: ${wizardForm.catatan}
   const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
   const canRun = stepOneValid && stepTwoValid && stepThreeValid
   const canContinue = isMeaningfulText(additionalInput, 8)
+  const activeSessionState = { productContext, wizardForm, uploadedFiles, additionalInput, result }
+  const sessionUsage = getSessionUsage(activeSessionState)
+  const sessionUsagePercent = Math.min(100, Math.round((sessionUsage / MAX_SESSION_CHARS) * 100))
+  const sessionLimitReached = sessionUsage >= MAX_SESSION_CHARS
+  const newChatDisabled = loading || sessionList.some(session => {
+    const state = session.id === sessionId ? activeSessionState : readSessionState(session.id)
+    return isSessionUnusedState(state)
+  })
 
   const handleFileUpload = useCallback(async (files) => {
     for (const file of Array.from(files)) {
       try {
-        const res = await uploadFile(sessionId, file)
+        const res = await uploadFile(sessionId, file, userId)
         setUploadedFiles(prev => [...prev, { name: file.name, preview: res.preview }])
-      } catch {
-        setError(`Upload failed: ${file.name}`)
+      } catch (error) {
+        setError(`Upload failed: ${file.name}. ${error.message}`)
       }
     }
-  }, [sessionId])
+  }, [sessionId, userId])
 
   const stepList = runHagen
     ? [...STEPS, { id: 'hagen', agent: 'hagen', label: 'Hagen is generating the execution script...' }]
@@ -1336,11 +2007,22 @@ Additional notes: ${wizardForm.catatan}
 
     try {
       const [data] = await Promise.all([
-        runAgents({ sessionId, productContext, runHagen, opts: { provider, model } }),
+        runAgents({ sessionId, userId, productContext, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
       setShowFeedback(true)
+      await persistSession({
+        productContext,
+        wizardStep,
+        wizardForm,
+        uploadedFiles,
+        runHagen,
+        provider,
+        model,
+        result: data,
+        additionalInput,
+      })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1349,6 +2031,10 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleContinue = async () => {
+    if (sessionLimitReached) {
+      setError('This session is already too long. Start a new conversation from the sidebar so the agents have a cleaner context and quota lasts longer.')
+      return
+    }
     if (!canContinue || !productContext.trim()) {
       setError('Additional input is still too short. Add specific context, such as target buyer, budget, pain point, or the requested concept revision.')
       return
@@ -1361,13 +2047,25 @@ Additional notes: ${wizardForm.catatan}
     try {
       const note = additionalInput.trim()
       const [data] = await Promise.all([
-        continueSession({ sessionId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
+        continueSession({ sessionId, userId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
         simulateSteps()
       ])
       setResult(data)
       setAdditionalInput('')
-      setProductContext(prev => `${prev.trim()}\n\nAdditional input:\n${note}`)
+      const nextProductContext = `${productContext.trim()}\n\nAdditional input:\n${note}`
+      setProductContext(nextProductContext)
       setShowFeedback(true)
+      await persistSession({
+        productContext: nextProductContext,
+        wizardStep,
+        wizardForm,
+        uploadedFiles,
+        runHagen,
+        provider,
+        model,
+        result: data,
+        additionalInput: '',
+      })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1376,7 +2074,7 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleClear = async () => {
-    await clearMemory(sessionId)
+    await clearMemory(sessionId, userId)
     clearSessionState(sessionId)
     setResult(null)
     setCompletedSteps([])
@@ -1401,6 +2099,21 @@ Additional notes: ${wizardForm.catatan}
     setShowFeedback(false)
     setAdditionalInput('')
     setError(null)
+    setSessionList(prev => {
+      const updated = prev.map(session => session.id === sessionId
+        ? { ...session, title: 'New conversation', hasResult: false, usage: 0, updatedAt: Date.now() }
+        : session)
+      writeSessionList(userId, updated)
+      saveBackendHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
+      saveUserHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
+      return updated
+    })
+  }
+
+  const handleSignOut = async () => {
+    if (loading) return
+    setShowLogoutConfirm(false)
+    await signOutFirebase()
   }
 
   return (
@@ -1408,11 +2121,10 @@ Additional notes: ${wizardForm.catatan}
       {/* Header */}
       <header className="app-header" style={{
         borderBottom: '1px solid var(--border)',
-        padding: '14px 20px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, background: 'rgba(10,10,11,0.9)',
-        backdropFilter: 'blur(12px)', zIndex: 100,
-        gap: 12, flexWrap: 'wrap',
+        background: 'rgba(10,10,11,0.9)',
+        backdropFilter: 'blur(12px)',
+        gap: 12,
       }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 400, letterSpacing: '-0.01em' }}>
@@ -1420,6 +2132,24 @@ Additional notes: ${wizardForm.catatan}
           </h1>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(open => !open)}
+            className="icon-btn"
+            aria-label={sidebarOpen ? 'Close chat history' : 'Open chat history'}
+            title={sidebarOpen ? 'Close history' : 'Open history'}
+          >
+            {sidebarOpen ? 'Close' : 'Menu'}
+          </button>
+          <button
+            type="button"
+            onClick={handleNewSession}
+            disabled={newChatDisabled}
+            className="header-action-btn"
+            title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+          >
+            New chat
+          </button>
           {Object.entries(AGENTS).map(([key, a]) => (
             <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: a.color }} />
@@ -1428,6 +2158,18 @@ Additional notes: ${wizardForm.catatan}
           <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
             5 agents
           </span>
+          <span style={{ fontSize: 11, color: cloudError ? '#e07070' : 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }} title={cloudError || authUser.email || authUser.uid}>
+            {!historyReady ? 'syncing' : cloudError ? 'sync error' : 'server save'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowLogoutConfirm(true)}
+            disabled={loading}
+            className="icon-btn"
+            title={authUser.email || authUser.displayName || 'Signed in'}
+          >
+            Logout
+          </button>
           {result && (
             <button onClick={handleClear} style={{
               marginLeft: 8, padding: '5px 12px', background: 'none',
@@ -1440,9 +2182,184 @@ Additional notes: ${wizardForm.catatan}
         </div>
       </header>
 
-      <div className="app-page" style={{ maxWidth: 1280, margin: '0 auto', width: '100%' }}>
+      {sidebarOpen && <div className="history-backdrop" onClick={() => setSidebarOpen(false)} />}
+
+      {showNewChatWarning && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowNewChatWarning(false)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-chat-warning-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">History limit</div>
+            <h2 id="new-chat-warning-title">Buat chat baru?</h2>
+            <p>
+              History chat sudah mencapai batas 3 sesi. Jika membuat chat ke-4, sesi paling lama akan terhapus otomatis.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setShowNewChatWarning(false)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleConfirmNewSession}
+              >
+                Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLogoutConfirm && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowLogoutConfirm(false)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-confirm-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">Logout</div>
+            <h2 id="logout-confirm-title">Keluar dari akun?</h2>
+            <p>
+              Progress yang sudah tersimpan akan tetap ada di akun ini. Kamu perlu login lagi untuk melanjutkan sesi.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setShowLogoutConfirm(false)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleSignOut}
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setDeleteTarget(null)}>
+          <div
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-history-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="confirm-modal-kicker">Delete history</div>
+            <h2 id="delete-history-title">Hapus history ini?</h2>
+            <p>
+              History "{deleteTarget.title || 'New conversation'}" akan dihapus dari akun ini dan tidak bisa dikembalikan.
+            </p>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="confirm-modal-secondary"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="confirm-modal-primary"
+                onClick={handleConfirmDeleteSession}
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <aside className={`history-sidebar ${sidebarOpen ? 'open' : ''}`} aria-label="Chat history">
+        <div className="history-sidebar-head">
+          <div>
+            <div className="history-eyebrow">History</div>
+            <div className="history-title">Conversations</div>
+          </div>
+          <button type="button" onClick={() => setSidebarOpen(false)} className="icon-btn" aria-label="Close history">Close</button>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleNewSession}
+          disabled={newChatDisabled}
+          className="new-chat-btn"
+          title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
+        >
+          + New chat
+        </button>
+
+        <div className="history-list">
+          {sessionList.map(session => (
+            <div
+              key={session.id}
+              className={`history-item-row ${session.id === sessionId ? 'active' : ''}`}
+            >
+              <button
+                type="button"
+                onClick={() => handleSelectSession(session.id)}
+                className="history-item"
+                disabled={loading}
+              >
+                <span className="history-item-title">{session.title || 'New conversation'}</span>
+                <span className="history-item-meta">
+                  {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
+                </span>
+              </button>
+              <button
+                type="button"
+                className="history-delete-btn"
+                onClick={() => handleAskDeleteSession(session)}
+                disabled={loading}
+                aria-label={`Delete ${session.title || 'New conversation'}`}
+                title="Delete history"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="history-note">
+          Maksimal 3 sesi per akun. Saat membuat sesi ke-4, sesi paling lama dihapus otomatis.
+        </div>
+      </aside>
+
+      <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`}>
         {/* LEFT PANEL */}
         <div className="app-left-panel">
+          <div className={`session-meter ${sessionUsage >= SESSION_WARNING_CHARS ? 'warning' : ''}`}>
+            <div className="session-meter-row">
+              <span>Session context</span>
+              <span>{sessionUsagePercent}%</span>
+            </div>
+            <div className="session-meter-track">
+              <div className="session-meter-fill" style={{ width: `${sessionUsagePercent}%` }} />
+            </div>
+            <p>
+              {sessionLimitReached
+                ? 'Session limit reached. Start a new chat for cleaner results.'
+                : sessionUsage >= SESSION_WARNING_CHARS
+                  ? 'This chat is getting long. A new chat will protect quality and quota.'
+                  : 'Keep each session focused for better agent output.'}
+            </p>
+          </div>
 
           {/* Product input */}
           <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
@@ -1697,9 +2614,9 @@ Additional notes: ${wizardForm.catatan}
               <div style={{ fontSize: 24, marginBottom: 8 }}>↑</div>
               <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                 Drag & drop or click<br />
-                <span style={{ color: 'var(--text-3)', fontSize: 11 }}>PDF, TXT, DOCX</span>
+                <span style={{ color: 'var(--text-3)', fontSize: 11 }}>TXT, MD, CSV</span>
               </div>
-              <input ref={fileRef} id="fileUpload" name="fileUpload" type="file" multiple accept=".pdf,.txt,.doc,.docx"
+              <input ref={fileRef} id="fileUpload" name="fileUpload" type="file" multiple accept=".txt,.md,.csv"
                 onChange={e => handleFileUpload(e.target.files)} style={{ display: 'none' }} />
             </div>
             {uploadedFiles.map((f, i) => (
@@ -1840,7 +2757,19 @@ Additional notes: ${wizardForm.catatan}
               borderRadius: 'var(--radius-lg)', padding: '28px 30px', minHeight: 420,
             }}>
               <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 22 }}>
-                <div style={{ width: 40, height: 40, borderRadius: '50%', border: '4px solid rgba(196,168,130,0.2)', borderTopColor: 'var(--accent)', animation: 'spin 1s linear infinite' }} />
+                <div style={{
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  minHeight: 40,
+                  aspectRatio: '1 / 1',
+                  flex: '0 0 40px',
+                  borderRadius: '50%',
+                  border: '4px solid rgba(196,168,130,0.2)',
+                  borderTopColor: 'var(--accent)',
+                  boxSizing: 'border-box',
+                  animation: 'spin 1s linear infinite'
+                }} />
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     SYSTEM RUNNING
@@ -1921,7 +2850,7 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Hagen output (if exists) */}
               {result.hagen_output && (
-                <OutputCard agentKey="hagen" content={result.hagen_output} title="Script eksekusi video" />
+                <OutputCard agentKey="hagen" content={result.hagen_output} title="Video execution script" />
               )}
 
               {/* Additional input */}
@@ -1962,14 +2891,14 @@ Additional notes: ${wizardForm.catatan}
                   </span>
                   <button
                     onClick={handleContinue}
-                    disabled={loading || !canContinue}
+                    disabled={loading || !canContinue || sessionLimitReached}
                     style={{
                       padding: '10px 16px',
-                      background: loading || !canContinue ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
-                      border: `1px solid ${loading || !canContinue ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
-                      color: loading || !canContinue ? 'var(--text-3)' : 'var(--rana)',
+                      background: loading || !canContinue || sessionLimitReached ? 'var(--bg4)' : 'rgba(196,168,130,0.15)',
+                      border: `1px solid ${loading || !canContinue || sessionLimitReached ? 'var(--border)' : 'rgba(196,168,130,0.3)'}`,
+                      color: loading || !canContinue || sessionLimitReached ? 'var(--text-3)' : 'var(--rana)',
                       borderRadius: 8, fontSize: 13,
-                      cursor: loading || !canContinue ? 'not-allowed' : 'pointer',
+                      cursor: loading || !canContinue || sessionLimitReached ? 'not-allowed' : 'pointer',
                       fontFamily: 'var(--font-body)',
                     }}
                   >
@@ -1980,7 +2909,7 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Feedback */}
               {showFeedback && (
-                <FeedbackBar sessionId={sessionId} onDone={() => setShowFeedback(false)} />
+                <FeedbackBar sessionId={sessionId} userId={userId} onDone={() => setShowFeedback(false)} />
               )}
             </>
           )}
@@ -1988,4 +2917,33 @@ Additional notes: ${wizardForm.catatan}
       </div>
     </div>
   )
+}
+
+export default function App() {
+  const [authUser, setAuthUser] = useState(null)
+  const [checkingAuth, setCheckingAuth] = useState(true)
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAuth(user => {
+      if (user && sessionStorage.getItem(POST_REGISTER_LOGOUT_KEY) === '1') {
+        setCheckingAuth(true)
+        signOutFirebase()
+          .catch(() => {})
+          .finally(() => {
+            sessionStorage.removeItem(POST_REGISTER_LOGOUT_KEY)
+            setAuthUser(null)
+            setCheckingAuth(false)
+          })
+        return
+      }
+      setAuthUser(user)
+      setCheckingAuth(false)
+    })
+    return unsubscribe
+  }, [])
+
+  if (checkingAuth) return <AuthLoadingView />
+  if (!authUser) return <LoginView />
+
+  return <RanaApp key={authUser.uid} authUser={authUser} />
 }
