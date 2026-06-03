@@ -19,3 +19,6 @@ dist/
 
 # Local app data
 backend/data/
+.vercel/
+backend/.vercel/
+frontend/.vercel/
