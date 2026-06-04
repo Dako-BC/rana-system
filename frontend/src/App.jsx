@@ -1357,7 +1357,7 @@ function LoginView() {
     try {
       if (isRegister) {
         sessionStorage.setItem(POST_REGISTER_LOGOUT_KEY, '1')
-        sessionStorage.setItem(POST_REGISTER_NOTICE_KEY, 'Register selesai. Silakan login dengan akun yang baru dibuat.')
+        sessionStorage.setItem(POST_REGISTER_NOTICE_KEY, 'Registration complete. Please log in with your new account.')
         await createAccountWithEmail({ name, email, password })
       } else {
         await signInWithEmail(email, password)
@@ -1397,7 +1397,7 @@ function LoginView() {
 
         {!isFirebaseConfigured ? (
           <div className="login-error">
-            Firebase belum dikonfigurasi. Isi file <code>.env</code> dari <code>.env.example</code>, lalu restart Vite.
+            Firebase is not configured. Fill in <code>.env</code> from <code>.env.example</code>, then restart Vite.
           </div>
         ) : (
           <>
@@ -1414,7 +1414,7 @@ function LoginView() {
               {isRegister && (
                 <label>
                   Name
-                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Nama akun" autoComplete="name" />
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Account name" autoComplete="name" />
                 </label>
               )}
               <label>
@@ -1423,7 +1423,7 @@ function LoginView() {
               </label>
               <label>
                 Password
-                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Minimal 6 karakter" autoComplete={isRegister ? 'new-password' : 'current-password'} required />
+                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="At least 6 characters" autoComplete={isRegister ? 'new-password' : 'current-password'} required />
               </label>
               {notice && <div className="login-notice">{notice}</div>}
               {error && <div className="login-error">{error}</div>}
@@ -1567,7 +1567,7 @@ Additional notes: ${wizardForm.catatan}
       })
       .catch(e => {
         console.warn('Failed to sync session to backend history:', e)
-        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+        setCloudError('Backend sync failed. History is only stored safely in this browser until the backend reconnects.')
       })
   }, [sessionId, userId])
 
@@ -1688,7 +1688,7 @@ Additional notes: ${wizardForm.catatan}
         setCloudError('')
       } catch (e) {
         console.warn('Failed to load backend history:', e)
-        setCloudError('Sync ke backend gagal. History hanya aman di browser ini sampai backend tersambung.')
+        setCloudError('Backend sync failed. History is only stored safely in this browser until the backend reconnects.')
       } finally {
         if (!cancelled) setHistoryReady(true)
       }
@@ -1758,7 +1758,7 @@ Additional notes: ${wizardForm.catatan}
       } catch (e) {
         console.warn('Failed to load Firebase sessions:', e)
         if (!cancelled) {
-          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+          setCloudError('Could not load progress from Firebase yet. Local progress is still available.')
         }
       } finally {
         if (!cancelled) setCloudReady(true)
@@ -1788,7 +1788,7 @@ Additional notes: ${wizardForm.catatan}
       e => {
         console.warn('Failed to subscribe Firebase sessions:', e)
         if (!cancelled) {
-          setCloudError('Belum bisa mengambil progress dari Firebase. Progress lokal tetap bisa dipakai.')
+          setCloudError('Could not load progress from Firebase yet. Local progress is still available.')
           setCloudReady(true)
         }
       }
@@ -2148,9 +2148,9 @@ Additional notes: ${wizardForm.catatan}
             onClick={e => e.stopPropagation()}
           >
             <div className="confirm-modal-kicker">History limit</div>
-            <h2 id="new-chat-warning-title">Buat chat baru?</h2>
+            <h2 id="new-chat-warning-title">Start a new chat?</h2>
             <p>
-              History chat sudah mencapai batas 3 sesi. Jika membuat chat ke-4, sesi paling lama akan terhapus otomatis.
+              Chat history has reached the 3-session limit. If you create a fourth chat, the oldest session will be deleted automatically.
             </p>
             <div className="confirm-modal-actions">
               <button
@@ -2158,14 +2158,14 @@ Additional notes: ${wizardForm.catatan}
                 className="confirm-modal-secondary"
                 onClick={() => setShowNewChatWarning(false)}
               >
-                Batal
+                Cancel
               </button>
               <button
                 type="button"
                 className="confirm-modal-primary"
                 onClick={handleConfirmNewSession}
               >
-                Lanjutkan
+                Continue
               </button>
             </div>
           </div>
@@ -2182,9 +2182,9 @@ Additional notes: ${wizardForm.catatan}
             onClick={e => e.stopPropagation()}
           >
             <div className="confirm-modal-kicker">Logout</div>
-            <h2 id="logout-confirm-title">Keluar dari akun?</h2>
+            <h2 id="logout-confirm-title">Log out of this account?</h2>
             <p>
-              Progress yang sudah tersimpan akan tetap ada di akun ini. Kamu perlu login lagi untuk melanjutkan sesi.
+              Saved progress will remain in this account. You will need to log in again to continue your sessions.
             </p>
             <div className="confirm-modal-actions">
               <button
@@ -2192,7 +2192,7 @@ Additional notes: ${wizardForm.catatan}
                 className="confirm-modal-secondary"
                 onClick={() => setShowLogoutConfirm(false)}
               >
-                Batal
+                Cancel
               </button>
               <button
                 type="button"
@@ -2243,7 +2243,7 @@ Additional notes: ${wizardForm.catatan}
         </div>
 
         <div className="history-note">
-          Maksimal 3 sesi per akun. Saat membuat sesi ke-4, sesi paling lama dihapus otomatis.
+          Maximum 3 sessions per account. When you create a fourth session, the oldest one is deleted automatically.
         </div>
       </aside>
 
