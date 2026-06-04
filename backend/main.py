@@ -12,11 +12,14 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Optional, Annotated
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials as firebase_credentials
 
 # LangGraph integration.
 from langgraph.graph import StateGraph, END
@@ -54,6 +57,11 @@ app.add_middleware(
 DATA_DIR = Path(os.environ.get("RANA_DATA_DIR", Path(__file__).resolve().parent / "data"))
 HISTORY_DB_PATH = DATA_DIR / "history.json"
 history_db_lock = threading.Lock()
+FIREBASE_AUTH_REQUIRED = os.environ.get("FIREBASE_AUTH_REQUIRED", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -61,6 +69,82 @@ if not api_key:
         "ANTHROPIC_API_KEY was not found. Add it to backend/.env or set it before starting the backend."
     )
 client = anthropic.Anthropic(api_key=api_key)
+
+
+def initialize_firebase_admin() -> bool:
+    if firebase_admin._apps:
+        return True
+
+    service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    project_id = os.environ.get("FIREBASE_PROJECT_ID")
+    try:
+        if service_account_json:
+            service_account = json.loads(service_account_json)
+            private_key = service_account.get("private_key")
+            if isinstance(private_key, str):
+                service_account["private_key"] = private_key.replace("\\n", "\n")
+            firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
+        else:
+            options = {"projectId": project_id} if project_id else None
+            firebase_admin.initialize_app(options=options)
+        return True
+    except Exception:
+        logger.exception("Failed to initialize Firebase Admin")
+        return False
+
+
+FIREBASE_ADMIN_READY = initialize_firebase_admin()
+
+
+def require_firebase_user(authorization: Optional[str] = Header(None)) -> dict[str, Any]:
+    if not FIREBASE_AUTH_REQUIRED:
+        return {}
+
+    if not FIREBASE_ADMIN_READY:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Firebase Admin is not configured on the backend. "
+                "Set FIREBASE_SERVICE_ACCOUNT_JSON or Firebase application credentials."
+            ),
+        )
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Firebase ID token. Sign in again and retry.",
+        )
+
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return firebase_auth.verify_id_token(token)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid Firebase ID token: {type(exc).__name__}",
+        ) from exc
+
+
+def resolve_authenticated_user_id(
+    provided_user_id: Optional[str],
+    claims: dict[str, Any],
+) -> str:
+    token_uid = claims.get("uid")
+    provided = (provided_user_id or "").strip()
+
+    if FIREBASE_AUTH_REQUIRED:
+        if not token_uid:
+            raise HTTPException(status_code=401, detail="Firebase token is missing a uid claim.")
+        if provided and provided != token_uid:
+            raise HTTPException(
+                status_code=403,
+                detail="Request user_id does not match the authenticated Firebase user.",
+            )
+        return token_uid
+
+    resolved = provided or str(token_uid or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    return resolved
 
 # Model configuration.
 PROVIDER_MODELS = {
@@ -1307,12 +1391,16 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
 
 
 @app.post("/api/run")
-async def run_agents(request: RunRequest):
+async def run_agents(
+    request: RunRequest,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
     """Run the full multi-agent pipeline."""
+    user_id = resolve_authenticated_user_id(request.user_id, claims)
     validate_product_context(request.product_context)
     ensure_session_capacity(
-        request.session_id, request.user_id, added_messages=6)
-    history = get_memory(request.session_id, request.user_id)
+        request.session_id, user_id, added_messages=6)
+    history = get_memory(request.session_id, user_id)
 
     initial_state: AgentState = {
         "session_id": request.session_id,
@@ -1345,7 +1433,7 @@ async def run_agents(request: RunRequest):
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"], request.user_id)
+    save_memory(request.session_id, result["messages"], user_id)
 
     return {
         "session_id": request.session_id,
@@ -1359,8 +1447,12 @@ async def run_agents(request: RunRequest):
 
 
 @app.post("/api/continue")
-async def continue_agents(request: ContinueRequest):
+async def continue_agents(
+    request: ContinueRequest,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
     """Add user input to an existing session and rerun the pipeline."""
+    user_id = resolve_authenticated_user_id(request.user_id, claims)
     validate_product_context(request.product_context)
     if not is_meaningful_text(request.additional_input, 8):
         raise HTTPException(
@@ -1369,8 +1461,8 @@ async def continue_agents(request: ContinueRequest):
         )
 
     ensure_session_capacity(
-        request.session_id, request.user_id, added_messages=7)
-    history = get_memory(request.session_id, request.user_id)
+        request.session_id, user_id, added_messages=7)
+    history = get_memory(request.session_id, user_id)
     additional_entry = {
         "role": "user",
         "content": f"[USER ADDITIONAL INPUT]\n{request.additional_input.strip()}"
@@ -1414,7 +1506,7 @@ Use this additional input to complete or revise the previous output in this sess
             detail=str(err)
         )
 
-    save_memory(request.session_id, result["messages"], request.user_id)
+    save_memory(request.session_id, result["messages"], user_id)
 
     return {
         "session_id": request.session_id,
@@ -1431,9 +1523,11 @@ Use this additional input to complete or revise the previous output in this sess
 async def upload_file(
     session_id: str = Form(...),
     user_id: Optional[str] = Form(None),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    claims: dict[str, Any] = Depends(require_firebase_user),
 ):
     """Upload a product brief or document."""
+    resolved_user_id = resolve_authenticated_user_id(user_id, claims)
     filename = file.filename or "uploaded-file"
     extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_UPLOAD_EXTENSIONS:
@@ -1464,28 +1558,32 @@ async def upload_file(
             detail="Uploaded file does not contain enough readable text."
         )
 
-    key = memory_key(session_id, user_id)
+    key = memory_key(session_id, resolved_user_id)
     if key not in session_memory:
         session_memory[key] = []
 
     # Store uploaded file text in session memory.
     file_entry = f"[FILE: {filename}]\n{text_content[:3000]}"
     session_memory[key].append({"role": "user", "content": file_entry})
-    save_memory(session_id, session_memory[key], user_id)
+    save_memory(session_id, session_memory[key], resolved_user_id)
 
     return {"status": "ok", "file_name": filename, "preview": text_content[:200]}
 
 
 @app.post("/api/feedback")
-async def save_feedback(data: FeedbackRequest):
+async def save_feedback(
+    data: FeedbackRequest,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
     """Save user feedback for Rana learning."""
+    user_id = resolve_authenticated_user_id(data.user_id, claims)
     if not data.feedback.strip():
         raise HTTPException(
             status_code=400, detail="feedback must not be empty")
 
     rana_learning.append({
         "session_id": data.session_id,
-        "user_id": data.user_id or "guest",
+        "user_id": user_id,
         "insight": data.feedback,
         "timestamp": str(asyncio.get_event_loop().time())
     })
@@ -1493,12 +1591,14 @@ async def save_feedback(data: FeedbackRequest):
 
 
 @app.get("/api/history/{user_id}")
-async def get_user_history(user_id: str):
+async def get_user_history(
+    user_id: str,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
     """Return persisted account history shared across browsers."""
-    if not user_id.strip():
-        raise HTTPException(status_code=400, detail="user_id is required")
+    resolved_user_id = resolve_authenticated_user_id(user_id, claims)
     db = read_history_db()
-    history = db.get(user_id, {})
+    history = db.get(resolved_user_id, {})
     return {
         "sessions": history.get("sessions", []),
         "states": history.get("states", {}),
@@ -1506,12 +1606,15 @@ async def get_user_history(user_id: str):
 
 
 @app.put("/api/history/{user_id}")
-async def save_user_history(user_id: str, payload: HistoryPayload):
+async def save_user_history(
+    user_id: str,
+    payload: HistoryPayload,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
     """Persist account history on the backend so browsers share one source."""
-    if not user_id.strip():
-        raise HTTPException(status_code=400, detail="user_id is required")
+    resolved_user_id = resolve_authenticated_user_id(user_id, claims)
     db = read_history_db()
-    db[user_id] = {
+    db[resolved_user_id] = {
         "sessions": payload.sessions[:10],
         "states": payload.states,
     }
@@ -1520,13 +1623,23 @@ async def save_user_history(user_id: str, payload: HistoryPayload):
 
 
 @app.get("/api/memory/{session_id}")
-async def get_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
-    return {"messages": get_memory(session_id, user_id)}
+async def get_session_memory(
+    session_id: str,
+    user_id: Optional[str] = Query(None),
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
+    resolved_user_id = resolve_authenticated_user_id(user_id, claims)
+    return {"messages": get_memory(session_id, resolved_user_id)}
 
 
 @app.delete("/api/memory/{session_id}")
-async def clear_session_memory(session_id: str, user_id: Optional[str] = Query(None)):
-    session_memory.pop(memory_key(session_id, user_id), None)
+async def clear_session_memory(
+    session_id: str,
+    user_id: Optional[str] = Query(None),
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
+    resolved_user_id = resolve_authenticated_user_id(user_id, claims)
+    session_memory.pop(memory_key(session_id, resolved_user_id), None)
     return {"status": "cleared"}
 
 

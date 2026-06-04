@@ -1,7 +1,16 @@
+import { getFirebaseIdToken } from './firebase.js'
+
 // Use deployed backend URL when configured.
 // Fall back to the Vite /api proxy locally.
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 const apiUrl = (path) => BASE_URL ? `${BASE_URL}${path}` : path
+
+async function authHeaders(extra = {}) {
+  const token = await getFirebaseIdToken()
+  return token
+    ? { ...extra, Authorization: `Bearer ${token}` }
+    : extra
+}
 
 async function parseApiError(res) {
   let detail = ''
@@ -32,7 +41,7 @@ async function parseApiError(res) {
 export async function runAgents({ sessionId, userId, productContext, runHagen = false, opts = {} }) {
   const res = await fetch(apiUrl('/api/run'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       session_id: sessionId,
       user_id: userId,
@@ -48,7 +57,7 @@ export async function runAgents({ sessionId, userId, productContext, runHagen = 
 export async function continueSession({ sessionId, userId, productContext, additionalInput, runHagen = false, opts = {} }) {
   const res = await fetch(apiUrl('/api/continue'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       session_id: sessionId,
       user_id: userId,
@@ -69,6 +78,7 @@ export async function uploadFile(sessionId, file, userId) {
   form.append('file', file)
   const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
+    headers: await authHeaders(),
     body: form,
   })
   if (!res.ok) throw await parseApiError(res)
@@ -78,7 +88,7 @@ export async function uploadFile(sessionId, file, userId) {
 export async function saveFeedback(sessionId, feedback, userId) {
   const res = await fetch(apiUrl('/api/feedback'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ session_id: sessionId, user_id: userId, feedback }),
   })
   if (!res.ok) throw await parseApiError(res)
@@ -87,7 +97,9 @@ export async function saveFeedback(sessionId, feedback, userId) {
 
 export async function fetchBackendHistory(userId) {
   if (!userId) return { sessions: [], states: {} }
-  const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(userId)}`))
+  const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(userId)}`), {
+    headers: await authHeaders(),
+  })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }
@@ -96,7 +108,7 @@ export async function saveBackendHistory(userId, sessions, states) {
   if (!userId) return { status: 'skipped' }
   const res = await fetch(apiUrl(`/api/history/${encodeURIComponent(userId)}`), {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ sessions, states }),
   })
   if (!res.ok) throw await parseApiError(res)
@@ -105,7 +117,10 @@ export async function saveBackendHistory(userId, sessions, states) {
 
 export async function clearMemory(sessionId, userId) {
   const query = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
-  const res = await fetch(apiUrl(`/api/memory/${sessionId}${query}`), { method: 'DELETE' })
+  const res = await fetch(apiUrl(`/api/memory/${sessionId}${query}`), {
+    method: 'DELETE',
+    headers: await authHeaders(),
+  })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }

@@ -91,6 +91,11 @@ export async function signOutFirebase() {
   await signOut(auth)
 }
 
+export async function getFirebaseIdToken() {
+  if (!auth?.currentUser) return null
+  return auth.currentUser.getIdToken()
+}
+
 export async function fetchUserSessions(uid, maxSessions) {
   if (!db || !uid) return []
   const q = query(sessionsCollection(uid), orderBy('updatedAt', 'desc'), limit(maxSessions))
