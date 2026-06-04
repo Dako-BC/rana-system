@@ -1029,6 +1029,97 @@ def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, ma
     )
 
 
+AWARENESS_LEVELS = {
+    "completely unaware",
+    "problem aware",
+    "solution aware",
+    "product aware",
+    "most aware",
+}
+
+
+def normalize_awareness_level(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def has_clear_hara_awareness(hara_output: Optional[str]) -> bool:
+    """Require Hara to diagnose awareness before creative agents run."""
+    try:
+        parsed = json.loads(hara_output or "{}")
+    except Exception:
+        return False
+
+    awareness = parsed.get("awareness_analysis")
+    if not isinstance(awareness, dict):
+        awareness = {}
+
+    current_level = normalize_awareness_level(
+        parsed.get("awareness_level") or awareness.get("awareness_level")
+    )
+    target_level = normalize_awareness_level(
+        parsed.get("awareness_target")
+        or awareness.get("awareness_target")
+        or awareness.get("target_awareness_level")
+    )
+    evidence = str(
+        parsed.get("awareness_evidence")
+        or awareness.get("awareness_evidence")
+        or awareness.get("evidence")
+        or ""
+    ).strip()
+    strategy = str(
+        parsed.get("awareness_strategy")
+        or awareness.get("awareness_strategy")
+        or ""
+    ).strip()
+    triggers = parsed.get("psychological_triggers") or awareness.get(
+        "psychological_triggers")
+    if not isinstance(triggers, list):
+        triggers = []
+
+    meaningful_triggers = [
+        trigger for trigger in triggers
+        if is_meaningful_text(str(trigger), min_length=4)
+    ]
+
+    return (
+        current_level in AWARENESS_LEVELS
+        and target_level in AWARENESS_LEVELS
+        and is_meaningful_text(evidence, min_length=12)
+        and is_meaningful_text(strategy, min_length=12)
+        and len(meaningful_triggers) >= 1
+    )
+
+
+def awareness_blocked_decision() -> str:
+    return json.dumps(
+        {
+            "top_image_ads": [],
+            "top_video_concepts": [],
+            "choice_rationale": (
+                "Creative agents were not dispatched because Hara did not provide a clear "
+                "awareness diagnosis with awareness_level, awareness_evidence, awareness_target, "
+                "psychological_triggers, and awareness_strategy."
+            ),
+            "awareness_check": "Blocked before creative work because Hara's awareness diagnosis was incomplete.",
+            "needs_human_review": [
+                "Review Hara output and add a clear Schwartz awareness diagnosis.",
+            ],
+            "next_steps": [
+                "Rerun with clearer product context, previous winning copy, customer objections, or audience research.",
+                "Make sure Hara identifies awareness_level, awareness_evidence, awareness_target, psychological_triggers, and awareness_strategy before creative work starts.",
+            ],
+            "run_hagen": False,
+            "user_summary": (
+                "Rana stopped the creative stage because the audience awareness level was not clear enough. "
+                "This protects the system from producing generic ads for the wrong buyer mindset. "
+                "Add stronger market context or rerun Hara so Bombom and Luna can create conversion-focused copy."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
 def rana_init(state: AgentState) -> StateUpdate:
     """Prepare context for Hara."""
     learning = "\n".join([
@@ -1104,6 +1195,13 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, system, prompt, max_tokens=600)
+    if not has_clear_hara_awareness(state.get("hara_output")):
+        return {
+            "current_step": "done",
+            "rana_decision": awareness_blocked_decision(),
+            "run_hagen": False,
+            "messages": [{"role": "assistant", "content": f"[RANA VALIDATES HARA] {result}"}],
+        }
     return {"current_step": "creative_agents",
             "messages": [{"role": "assistant", "content": f"[RANA VALIDATES HARA] {result}"}]}
 
@@ -1199,6 +1297,17 @@ def route_after_rana_decision(state: AgentState) -> str:
     return END
 
 
+def route_after_hara_validation(state: AgentState) -> str:
+    if has_clear_hara_awareness(state.get("hara_output")):
+        return "creative_agents"
+    return END
+
+
+def dispatch_creative_agents(state: AgentState) -> StateUpdate:
+    """No-op graph node used to fan out only after awareness validation passes."""
+    return {"current_step": "creative_agents"}
+
+
 # Build the graph.
 def build_graph():
     graph = StateGraph(AgentState)
@@ -1206,6 +1315,7 @@ def build_graph():
     graph.add_node("rana_init", rana_init)
     graph.add_node("hara_research", hara_research)
     graph.add_node("rana_validate_hara", rana_validate_hara)
+    graph.add_node("dispatch_creative_agents", dispatch_creative_agents)
     graph.add_node("bombom_create_ads", bombom_create_ads)
     graph.add_node("luna_create_video", luna_create_video)
     graph.add_node("rana_final_decision", rana_final_decision)
@@ -1214,9 +1324,17 @@ def build_graph():
     graph.set_entry_point("rana_init")
     graph.add_edge("rana_init", "hara_research")
     graph.add_edge("hara_research", "rana_validate_hara")
-    # Run Bombom and Luna after Hara validation.
-    graph.add_edge("rana_validate_hara", "bombom_create_ads")
-    graph.add_edge("rana_validate_hara", "luna_create_video")
+    # Run Bombom and Luna only after Hara has a clear awareness diagnosis.
+    graph.add_conditional_edges(
+        "rana_validate_hara",
+        route_after_hara_validation,
+        {
+            "creative_agents": "dispatch_creative_agents",
+            END: END,
+        },
+    )
+    graph.add_edge("dispatch_creative_agents", "bombom_create_ads")
+    graph.add_edge("dispatch_creative_agents", "luna_create_video")
     graph.add_edge("bombom_create_ads", "rana_final_decision")
     graph.add_edge("luna_create_video", "rana_final_decision")
     graph.add_conditional_edges(

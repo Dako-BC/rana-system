@@ -3,22 +3,34 @@ Output from Hara (Research Agent):
 
 Validate the Hara output using the criteria below.
 
-APPROVAL CRITERIA — approve if ALL of the following are true:
+APPROVAL CRITERIA - approve if ALL of the following are true:
+- awareness_level is present and is one of: Completely Unaware, Problem Aware, Solution Aware, Product Aware, Most Aware
+- awareness_evidence is a structured object with source, audience_signal, and why_this_level; it is not empty or generic
+- awareness_target is present and realistic
+- psychological_triggers is an array of structured objects with trigger, why_it_matters, and buying_moment; each trigger is specific, not a general description
+- awareness_strategy is a structured object with current_to_target, copy_direction, landing_page_angle, and follow_up_angle
 - main_pain_point is specific and actionable, not generic
 - decision_trigger is concrete (not "affordable price" or "good quality")
 - at least 2 objection handlings are present
 - ad_insight is directly usable by the creative team
 
-REVISION CRITERIA — request revision if ANY of the following:
+REVISION CRITERIA - request revision if ANY of the following:
+- awareness_level is missing, unclear, invalid, or not backed by evidence
+- awareness_evidence, psychological_triggers, or awareness_strategy are collapsed into generic prose instead of structured fields
+- psychological triggers are generic or not connected to conversion
 - pain point is vague or could apply to any product
 - decision_trigger is a generic marketing cliche
 - objection handling is missing or too shallow
 - ad_insight is theoretical and not actionable
+
+If awareness_level is missing or unclear, status must be "revision_needed" and creative agents must not proceed.
 
 Format JSON:
 {
   "status": "approved" / "revision_needed",
   "assessment": "...",
   "what_needs_improvement": "none / [specify]",
+  "awareness_level": "...",
+  "awareness_target": "...",
   "key_insight_for_creative_team": "Summary of the most important insight in 200 words"
 }

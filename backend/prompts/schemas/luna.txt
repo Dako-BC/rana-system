@@ -2,6 +2,8 @@
   "video_concepts": [
     {
       "number": 1,
+      "awareness_level": "Completely Unaware / Problem Aware / Solution Aware / Product Aware / Most Aware",
+      "awareness_strategy": "...",
       "content_angle": "...",
       "hook_scene": {
         "duration": "0-3 seconds",

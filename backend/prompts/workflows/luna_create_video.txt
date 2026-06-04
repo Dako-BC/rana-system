@@ -6,5 +6,11 @@ Product:
 
 Create 3-5 video ad concepts with varied angles.
 
-If Hara output is incomplete or missing, still produce best-effort concepts
-based on available product context. Note assumptions in the closest field.
+REQUIRED:
+- Use Hara awareness_level, awareness_evidence, awareness_target, psychological_triggers, and awareness_strategy as the main strategy.
+- Each concept must include awareness_level and awareness_strategy.
+- Cover distinct awareness levels when possible, especially the current awareness_level and awareness_target from Hara.
+- Make the first 0-3 seconds match the viewer's current awareness, not just the product feature.
+- Keep each concept conversion-focused: curiosity, felt need, trust, urgency, or closing momentum.
+
+If Hara output is incomplete or missing, do not hide the gap. Produce best-effort concepts based on available product context and note assumptions in the closest field.
