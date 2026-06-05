@@ -1497,6 +1497,12 @@ function RanaApp({ authUser }) {
   const didInitialCloudSync = useRef(false)
   const didUploadLocalSessions = useRef(false)
   const skipNextPersist = useRef(false)
+  const backendHistoryEnabled = !isFirebaseConfigured
+
+  const saveBackendHistoryIfEnabled = useCallback((sessions, states) => {
+    if (!backendHistoryEnabled) return Promise.resolve({ status: 'skipped' })
+    return saveBackendHistory(userId, sessions, states)
+  }, [backendHistoryEnabled, userId])
 
   useEffect(() => {
     sessionIdRef.current = sessionId
@@ -1562,7 +1568,7 @@ Additional notes: ${wizardForm.catatan}
       })
     }
 
-    return saveBackendHistory(userId, updated, states)
+    return saveBackendHistoryIfEnabled(updated, states)
       .then(() => {
         if (options.clearCloudError !== false) setCloudError('')
       })
@@ -1570,7 +1576,7 @@ Additional notes: ${wizardForm.catatan}
         console.warn('Failed to sync session to backend history:', e)
         setCloudError('Backend sync failed. History is only stored safely in this browser until the backend reconnects.')
       })
-  }, [sessionId, userId])
+  }, [sessionId, userId, saveBackendHistoryIfEnabled])
 
   useEffect(() => {
     if (loading || !historyReady) return
@@ -1651,6 +1657,11 @@ Additional notes: ${wizardForm.catatan}
   }
 
   useEffect(() => {
+    if (!backendHistoryEnabled) {
+      setHistoryReady(true)
+      return
+    }
+
     let cancelled = false
     let didInitialBackendSync = false
     setHistoryReady(false)
@@ -1682,7 +1693,7 @@ Additional notes: ${wizardForm.catatan}
             loadSessionState(nextSessionId)
           }
           if (!didInitialBackendSync) {
-            await saveBackendHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
+            await saveBackendHistoryIfEnabled(mergedSessions, getStatesForSessions(mergedSessions))
           }
         }
         didInitialBackendSync = true
@@ -1702,7 +1713,7 @@ Additional notes: ${wizardForm.catatan}
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [userId])
+  }, [userId, backendHistoryEnabled, saveBackendHistoryIfEnabled])
 
   useEffect(() => {
     if (!isFirebaseConfigured) return
@@ -1836,7 +1847,7 @@ Additional notes: ${wizardForm.catatan}
     writeSessionList(userId, nextList)
     setSessionList(nextList)
     writeSessionState(nextId, getEmptySessionState())
-    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    saveBackendHistoryIfEnabled(nextList, getStatesForSessions(nextList)).catch(() => { })
     saveSessionToCloud(userId, nextList[0], getEmptySessionState()).catch(() => { })
     saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     loadSessionState(nextId)
@@ -1878,7 +1889,7 @@ Additional notes: ${wizardForm.catatan}
 
     writeSessionList(userId, nextList)
     setSessionList(nextList)
-    saveBackendHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
+    saveBackendHistoryIfEnabled(nextList, getStatesForSessions(nextList)).catch(() => { })
     saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     setDeleteTarget(null)
 
@@ -1898,7 +1909,7 @@ Additional notes: ${wizardForm.catatan}
         writeSessionList(userId, [emptySession])
         writeSessionState(nextId, getEmptySessionState())
         setSessionList([emptySession])
-        saveBackendHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
+        saveBackendHistoryIfEnabled([emptySession], getStatesForSessions([emptySession])).catch(() => { })
         saveSessionToCloud(userId, emptySession, getEmptySessionState()).catch(() => { })
         saveUserHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
         loadSessionState(nextId)
@@ -2104,7 +2115,7 @@ Additional notes: ${wizardForm.catatan}
         ? { ...session, title: 'New conversation', hasResult: false, usage: 0, updatedAt: Date.now() }
         : session)
       writeSessionList(userId, updated)
-      saveBackendHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
+      saveBackendHistoryIfEnabled(updated, getStatesForSessions(updated)).catch(() => { })
       saveUserHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
       return updated
     })
@@ -2159,7 +2170,7 @@ Additional notes: ${wizardForm.catatan}
             5 agents
           </span>
           <span style={{ fontSize: 11, color: cloudError ? '#e07070' : 'var(--text-3)', fontFamily: 'var(--font-mono)', marginLeft: 4 }} title={cloudError || authUser.email || authUser.uid}>
-            {!historyReady ? 'syncing' : cloudError ? 'sync error' : 'server save'}
+            {!historyReady ? 'syncing' : cloudError ? 'sync error' : 'cloud save'}
           </span>
           <button
             type="button"
