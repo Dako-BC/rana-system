@@ -21,6 +21,7 @@ async function parseApiError(res) {
     detail = await res.text()
   }
 
+  const isFirebaseAdminError = /firebase admin|firebase application credentials|firebase id token/i.test(detail)
   const friendlyMessages = {
     400: 'The request is invalid. Check the input and try again.',
     401: 'Not authenticated. Try refreshing the page.',
@@ -30,7 +31,9 @@ async function parseApiError(res) {
     429: 'AI service rate/quota limit reached. Wait a moment or check the Anthropic usage limit.',
     500: 'The server encountered an internal error. Please try again later.',
     502: 'The AI service returned an upstream error. Check the backend terminal for details.',
-    503: 'The backend cannot connect to the AI service right now. Check network/server connectivity.',
+    503: isFirebaseAdminError
+      ? 'Firebase authentication is not configured on the backend. Check backend Firebase Admin environment variables.'
+      : 'The backend cannot connect to the AI service right now. Check network/server connectivity.',
   }
 
   const friendly = friendlyMessages[res.status] || `An error occurred (${res.status}).`
