@@ -31,7 +31,9 @@ import anthropic
 from anthropic import APIError
 from anthropic.types import MessageParam
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+ENV_DIR = Path(__file__).resolve().parent
+load_dotenv(ENV_DIR / ".env")
+load_dotenv(ENV_DIR / ".env.local", override=True)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -72,11 +74,25 @@ client = anthropic.Anthropic(api_key=api_key)
 
 
 def initialize_firebase_admin() -> bool:
+    if not FIREBASE_AUTH_REQUIRED:
+        logger.info("Firebase auth is disabled for the backend.")
+        return False
+
     if firebase_admin._apps:
         return True
 
     service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
     project_id = os.environ.get("FIREBASE_PROJECT_ID")
+    app_credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+
+    if not service_account_json and not project_id and not app_credentials:
+        logger.warning(
+            "Firebase auth is required, but Firebase Admin credentials are missing. "
+            "Set FIREBASE_SERVICE_ACCOUNT_JSON, set GOOGLE_APPLICATION_CREDENTIALS, "
+            "or set FIREBASE_AUTH_REQUIRED=false for local development."
+        )
+        return False
+
     try:
         if service_account_json:
             service_account = json.loads(service_account_json)
@@ -1774,4 +1790,9 @@ async def get_model_availability():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agents": ["Rana", "Hara", "Bombom", "Luna", "Hagen"]}
+    return {
+        "status": "ok",
+        "agents": ["Rana", "Hara", "Bombom", "Luna", "Hagen"],
+        "firebase_auth_required": FIREBASE_AUTH_REQUIRED,
+        "firebase_admin_ready": FIREBASE_ADMIN_READY,
+    }
