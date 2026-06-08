@@ -1,10 +1,14 @@
 import { initializeApp } from 'firebase/app'
 import {
+  browserLocalPersistence,
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
+  setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   createUserWithEmailAndPassword,
   signOut,
   updateProfile,
@@ -44,6 +48,35 @@ const app = isFirebaseConfigured ? initializeApp(firebaseConfig) : null
 export const auth = app ? getAuth(app) : null
 const db = app ? getFirestore(app) : null
 const googleProvider = new GoogleAuthProvider()
+googleProvider.addScope('email')
+googleProvider.addScope('profile')
+googleProvider.setCustomParameters({ prompt: 'select_account' })
+
+const GOOGLE_REDIRECT_ERRORS = new Set([
+  'auth/popup-blocked',
+  'auth/operation-not-supported-in-this-environment',
+  'auth/web-storage-unsupported',
+])
+
+async function prepareAuth() {
+  if (!auth) throw new Error('Firebase is not configured.')
+  await setPersistence(auth, browserLocalPersistence)
+}
+
+export function getGoogleAuthErrorMessage(error) {
+  const code = error?.code || ''
+  const messages = {
+    'auth/account-exists-with-different-credential': 'This email already uses another login method. Log in with that method first, then connect Google.',
+    'auth/cancelled-popup-request': 'The previous Google login window was cancelled. Please try again.',
+    'auth/network-request-failed': 'Google login could not reach Firebase. Check your internet connection and try again.',
+    'auth/operation-not-allowed': 'Google login is not enabled in Firebase Authentication. Enable the Google provider in Firebase Console.',
+    'auth/popup-blocked': 'The browser blocked the Google login window. Allow popups for this site and try again.',
+    'auth/popup-closed-by-user': 'The Google login window was closed before sign-in completed.',
+    'auth/unauthorized-domain': `This domain (${window.location.hostname}) is not authorized in Firebase. Add it under Authentication > Settings > Authorized domains.`,
+    'auth/web-storage-unsupported': 'Google login needs browser storage. Enable cookies/site storage or use a normal browser window.',
+  }
+  return messages[code] || error?.message || 'Google login failed. Please try again.'
+}
 
 const userDoc = (uid) => doc(db, 'users', uid)
 const sessionsCollection = (uid) => collection(db, 'users', uid, 'sessions')
@@ -68,8 +101,19 @@ export function subscribeToAuth(callback) {
 }
 
 export async function signInWithGoogleAccount() {
-  if (!auth) throw new Error('Firebase is not configured.')
-  return signInWithPopup(auth, googleProvider)
+  await prepareAuth()
+  try {
+    return await signInWithPopup(auth, googleProvider)
+  } catch (error) {
+    if (!GOOGLE_REDIRECT_ERRORS.has(error?.code)) throw error
+    await signInWithRedirect(auth, googleProvider)
+    return null
+  }
+}
+
+export async function completeGoogleRedirectSignIn() {
+  await prepareAuth()
+  return getRedirectResult(auth)
 }
 
 export async function signInWithEmail(email, password) {

@@ -1450,6 +1450,7 @@ async def run_agents(
         )
 
     save_memory(request.session_id, result["messages"], user_id)
+    memory_message_count = len(get_memory(request.session_id, user_id))
 
     return {
         "session_id": request.session_id,
@@ -1459,6 +1460,7 @@ async def run_agents(
         "hagen_output": result.get("hagen_output"),
         "rana_decision": result.get("rana_decision"),
         "steps_completed": result.get("current_step"),
+        "memory_message_count": memory_message_count,
     }
 
 
@@ -1523,6 +1525,7 @@ Use this additional input to complete or revise the previous output in this sess
         )
 
     save_memory(request.session_id, result["messages"], user_id)
+    memory_message_count = len(get_memory(request.session_id, user_id))
 
     return {
         "session_id": request.session_id,
@@ -1532,6 +1535,7 @@ Use this additional input to complete or revise the previous output in this sess
         "hagen_output": result.get("hagen_output"),
         "rana_decision": result.get("rana_decision"),
         "steps_completed": result.get("current_step"),
+        "memory_message_count": memory_message_count,
     }
 
 
@@ -1583,7 +1587,12 @@ async def upload_file(
     session_memory[key].append({"role": "user", "content": file_entry})
     save_memory(session_id, session_memory[key], resolved_user_id)
 
-    return {"status": "ok", "file_name": filename, "preview": text_content[:200]}
+    return {
+        "status": "ok",
+        "file_name": filename,
+        "preview": text_content[:200],
+        "memory_message_count": len(get_memory(session_id, resolved_user_id)),
+    }
 
 
 @app.post("/api/feedback")
