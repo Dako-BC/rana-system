@@ -13,16 +13,13 @@ import {
 import {
   createAccountWithEmail,
   deleteSessionFromCloud,
-  fetchUserHistory,
   fetchSessionState,
   isFirebaseConfigured,
   saveSessionToCloud,
-  saveUserHistory,
   signInWithEmail,
   signInWithGoogleAccount,
   signOutFirebase,
   subscribeToAuth,
-  subscribeToUserHistory,
   subscribeToUserSessions,
 } from './lib/firebase.js'
 
@@ -1495,7 +1492,6 @@ function RanaApp({ authUser }) {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const fileRef = useRef()
   const didInitialCloudSync = useRef(false)
-  const didUploadLocalSessions = useRef(false)
   const skipNextPersist = useRef(false)
   const backendHistoryEnabled = !isFirebaseConfigured
 
@@ -1559,22 +1555,20 @@ Additional notes: ${wizardForm.catatan}
     const states = getStatesForSessions(updated)
     states[sessionId] = state
 
-    if (isFirebaseConfigured && currentSession) {
-      saveSessionToCloud(userId, currentSession, state).catch(e => {
-        console.warn('Failed to sync session to Firebase:', e)
-      })
-      saveUserHistory(userId, updated, states).catch(e => {
-        console.warn('Failed to sync account history to Firebase:', e)
-      })
-    }
+    const cloudSave = isFirebaseConfigured && currentSession
+      ? saveSessionToCloud(userId, currentSession, state)
+      : Promise.resolve()
 
-    return saveBackendHistoryIfEnabled(updated, states)
+    return Promise.all([
+      cloudSave,
+      saveBackendHistoryIfEnabled(updated, states),
+    ])
       .then(() => {
         if (options.clearCloudError !== false) setCloudError('')
       })
       .catch(e => {
-        console.warn('Failed to sync session to backend history:', e)
-        setCloudError('Backend sync failed. History is only stored safely in this browser until the backend reconnects.')
+        console.warn('Failed to sync session:', e)
+        setCloudError('Cloud sync failed. Progress is still stored in this browser.')
       })
   }, [sessionId, userId, saveBackendHistoryIfEnabled])
 
@@ -1718,55 +1712,80 @@ Additional notes: ${wizardForm.catatan}
   useEffect(() => {
     if (!isFirebaseConfigured) return
     let cancelled = false
-    let latestCloudSessions = []
-    let latestHistorySessions = []
+    let initialized = false
+    let migrationStarted = false
+    let latestSnapshotVersion = 0
 
     setCloudReady(false)
     setCloudError('')
 
-    const syncFromCloud = async () => {
+    const applyCloudSessions = async (cloudSessions, snapshotVersion) => {
       try {
         const localSessions = readSessionList(userId)
-        const cloudSessions = mergeSessions(latestCloudSessions, latestHistorySessions)
 
-        if (cloudSessions.length) {
-          const states = await Promise.all(
-            cloudSessions.map(async session => [session.id, await fetchSessionState(userId, session.id)])
-          )
-          if (cancelled) return
-
-          states.forEach(([id, state]) => {
-            if (state) writeSessionState(id, state)
-          })
-        }
-
-        const usefulLocalSessions = cloudSessions.length
-          ? localSessions.filter(session => !isSessionUnusedState(readSessionState(session.id)))
-          : localSessions
-        const mergedSessions = mergeSessions(usefulLocalSessions, cloudSessions)
-        if (!didUploadLocalSessions.current) {
-          const cloudSessionIds = new Set(cloudSessions.map(session => session.id))
-          const localOnlySessions = mergedSessions.filter(session => !cloudSessionIds.has(session.id))
-          await Promise.all(localOnlySessions.map(session => {
+        if (!initialized && !cloudSessions.length && !migrationStarted) {
+          migrationStarted = true
+          await Promise.all(localSessions.map(session => {
             const state = readSessionState(session.id) || getEmptySessionState()
             return saveSessionToCloud(userId, session, state)
           }))
-          await saveUserHistory(userId, mergedSessions, getStatesForSessions(mergedSessions))
-          didUploadLocalSessions.current = true
+          if (cancelled || snapshotVersion !== latestSnapshotVersion) return
+          initialized = true
+          if (!cancelled) {
+            setCloudReady(true)
+            setCloudError('')
+          }
+          return
         }
-        if (cancelled) return
 
-        if (mergedSessions.length) {
+        const states = await Promise.all(
+          cloudSessions.map(async session => [session.id, await fetchSessionState(userId, session.id)])
+        )
+        if (cancelled || snapshotVersion !== latestSnapshotVersion) return
+
+        states.forEach(([id, state]) => {
+          if (!state) return
+          const localSession = localSessions.find(session => session.id === id)
+          const cloudSession = cloudSessions.find(session => session.id === id)
+          if (
+            !didInitialCloudSync.current ||
+            !localSession ||
+            (cloudSession?.updatedAt || 0) >= (localSession.updatedAt || 0)
+          ) {
+            writeSessionState(id, state)
+          }
+        })
+
+        const canonicalSessions = cloudSessions
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+          .slice(0, MAX_SESSIONS)
+
+        if (canonicalSessions.length) {
           const activeId = readActiveSessionId(userId)
-          const shouldLoadSession = !didInitialCloudSync.current || !mergedSessions.some(session => session.id === sessionIdRef.current)
-          const nextSessionId = mergedSessions.some(session => session.id === activeId)
+          const currentLocal = localSessions.find(session => session.id === sessionIdRef.current)
+          const currentCloud = canonicalSessions.find(session => session.id === sessionIdRef.current)
+          const shouldLoadSession = (
+            !didInitialCloudSync.current ||
+            !currentCloud ||
+            (currentCloud.updatedAt || 0) > (currentLocal?.updatedAt || 0)
+          )
+          const nextSessionId = canonicalSessions.some(session => session.id === sessionIdRef.current)
+            ? sessionIdRef.current
+            : canonicalSessions.some(session => session.id === activeId)
             ? activeId
-            : mergedSessions[0].id
-          writeSessionList(userId, mergedSessions)
-          setSessionList(mergedSessions)
+            : canonicalSessions[0].id
+
+          writeSessionList(userId, canonicalSessions)
+          setSessionList(canonicalSessions)
           if (shouldLoadSession) loadSessionState(nextSessionId)
+        } else if (initialized) {
+          writeSessionList(userId, [])
+          setSessionList([])
         }
+
+        initialized = true
         didInitialCloudSync.current = true
+        setCloudError('')
       } catch (e) {
         console.warn('Failed to load Firebase sessions:', e)
         if (!cancelled) {
@@ -1777,25 +1796,12 @@ Additional notes: ${wizardForm.catatan}
       }
     }
 
-    fetchUserHistory(userId)
-      .then(history => {
-        if (cancelled) return
-        latestHistorySessions = history.sessions
-        Object.entries(history.states || {}).forEach(([id, state]) => {
-          if (state) writeSessionState(id, state)
-        })
-        syncFromCloud()
-      })
-      .catch(e => {
-        console.warn('Failed to fetch Firebase history:', e)
-      })
-
     const unsubscribe = subscribeToUserSessions(
       userId,
       MAX_SESSIONS,
       cloudSessions => {
-        latestCloudSessions = cloudSessions
-        syncFromCloud()
+        const snapshotVersion = ++latestSnapshotVersion
+        applyCloudSessions(cloudSessions, snapshotVersion)
       },
       e => {
         console.warn('Failed to subscribe Firebase sessions:', e)
@@ -1805,24 +1811,10 @@ Additional notes: ${wizardForm.catatan}
         }
       }
     )
-    const unsubscribeHistory = subscribeToUserHistory(
-      userId,
-      history => {
-        latestHistorySessions = history.sessions
-        Object.entries(history.states || {}).forEach(([id, state]) => {
-          if (state) writeSessionState(id, state)
-        })
-        syncFromCloud()
-      },
-      e => {
-        console.warn('Failed to subscribe Firebase history:', e)
-      }
-    )
 
     return () => {
       cancelled = true
       unsubscribe()
-      unsubscribeHistory()
     }
   }, [userId])
 
@@ -1849,7 +1841,6 @@ Additional notes: ${wizardForm.catatan}
     writeSessionState(nextId, getEmptySessionState())
     saveBackendHistoryIfEnabled(nextList, getStatesForSessions(nextList)).catch(() => { })
     saveSessionToCloud(userId, nextList[0], getEmptySessionState()).catch(() => { })
-    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     loadSessionState(nextId)
   }
 
@@ -1890,7 +1881,6 @@ Additional notes: ${wizardForm.catatan}
     writeSessionList(userId, nextList)
     setSessionList(nextList)
     saveBackendHistoryIfEnabled(nextList, getStatesForSessions(nextList)).catch(() => { })
-    saveUserHistory(userId, nextList, getStatesForSessions(nextList)).catch(() => { })
     setDeleteTarget(null)
 
     if (deletingActiveSession) {
@@ -1911,7 +1901,6 @@ Additional notes: ${wizardForm.catatan}
         setSessionList([emptySession])
         saveBackendHistoryIfEnabled([emptySession], getStatesForSessions([emptySession])).catch(() => { })
         saveSessionToCloud(userId, emptySession, getEmptySessionState()).catch(() => { })
-        saveUserHistory(userId, [emptySession], getStatesForSessions([emptySession])).catch(() => { })
         loadSessionState(nextId)
         if (window.innerWidth > 980) setSidebarOpen(true)
       }
@@ -2116,7 +2105,6 @@ Additional notes: ${wizardForm.catatan}
         : session)
       writeSessionList(userId, updated)
       saveBackendHistoryIfEnabled(updated, getStatesForSessions(updated)).catch(() => { })
-      saveUserHistory(userId, updated, getStatesForSessions(updated)).catch(() => { })
       return updated
     })
   }
