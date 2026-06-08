@@ -12,9 +12,11 @@ import {
 } from './lib/api.js'
 import {
   createAccountWithEmail,
+  completeGoogleRedirectSignIn,
   deleteSessionFromCloud,
   fetchSessionState,
   isFirebaseConfigured,
+  getGoogleAuthErrorMessage,
   saveSessionToCloud,
   signInWithEmail,
   signInWithGoogleAccount,
@@ -31,8 +33,8 @@ const SESSION_STATE_PREFIX = 'rana_session_state:'
 const POST_REGISTER_LOGOUT_KEY = 'rana_post_register_logout'
 const POST_REGISTER_NOTICE_KEY = 'rana_post_register_notice'
 const MAX_SESSIONS = 3
-const MAX_SESSION_CHARS = 18000
-const SESSION_WARNING_CHARS = 13000
+const MAX_SESSION_MESSAGES = 14
+const SESSION_WARNING_MESSAGES = 10
 const defaultWizardForm = {
   namaProduk: '',
   kategori: '',
@@ -132,6 +134,7 @@ function getEmptySessionState() {
     wizardStep: 1,
     wizardForm: defaultWizardForm,
     uploadedFiles: [],
+    sessionMessageCount: 0,
     runHagen: false,
     provider: DEFAULT_PROVIDER,
     model: getDefaultModel(DEFAULT_PROVIDER),
@@ -171,16 +174,21 @@ function getStatesForSessions(sessions) {
 }
 
 function getSessionUsage(state) {
-  const payload = [
-    state?.productContext,
-    state?.additionalInput,
-    state?.result?.hara_output,
-    state?.result?.bombom_output,
-    state?.result?.luna_output,
-    state?.result?.hagen_output,
-    state?.result?.rana_decision,
-  ].filter(Boolean).join('\n')
-  return payload.length
+  if (Number.isFinite(state?.sessionMessageCount)) {
+    return Math.max(0, state.sessionMessageCount)
+  }
+
+  // Older saved sessions do not have the backend memory count yet.
+  return (state?.result ? 6 : 0) + (state?.uploadedFiles?.length || 0)
+}
+
+function getSessionUsagePercent(usage) {
+  return Math.min(100, Math.round((usage / MAX_SESSION_MESSAGES) * 100))
+}
+
+function getStoredSessionUsage(session) {
+  const usage = session?.usage || 0
+  return usage > MAX_SESSION_MESSAGES ? (session?.hasResult ? 6 : 0) : usage
 }
 
 function isSessionUnusedState(state) {
@@ -1337,6 +1345,7 @@ function LoginView() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState(() => {
@@ -1345,6 +1354,20 @@ function LoginView() {
     return savedNotice
   })
   const isRegister = mode === 'register'
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) return
+    let cancelled = false
+
+    completeGoogleRedirectSignIn()
+      .catch(e => {
+        if (!cancelled) setError(getGoogleAuthErrorMessage(e))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -1375,7 +1398,7 @@ function LoginView() {
     try {
       await signInWithGoogleAccount()
     } catch (e) {
-      setError(e.message || 'Google login failed. Try again.')
+      setError(getGoogleAuthErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -1399,10 +1422,10 @@ function LoginView() {
         ) : (
           <>
             <div className="login-tabs" role="tablist" aria-label="Authentication mode">
-              <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError('') }}>
+              <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setShowPassword(false); setError('') }}>
                 Login
               </button>
-              <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); setNotice('') }}>
+              <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setShowPassword(false); setError(''); setNotice('') }}>
                 Register
               </button>
             </div>
@@ -1420,7 +1443,35 @@ function LoginView() {
               </label>
               <label>
                 Password
-                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="At least 6 characters" autoComplete={isRegister ? 'new-password' : 'current-password'} required />
+                <span className="password-field">
+                  <input
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="At least 6 characters"
+                    autoComplete={isRegister ? 'new-password' : 'current-password'}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword(visible => !visible)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? (
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 3l18 18M10.6 10.7a2 2 0 002.7 2.7M9.9 4.2A10.9 10.9 0 0112 4c5.2 0 9 5.2 9 8a9.7 9.7 0 01-2.1 3.6M6.6 6.6C4.3 8.1 3 10.5 3 12c0 2.8 3.8 8 9 8 1.5 0 2.9-.4 4.1-1" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 12c0-2.8 3.8-8 9-8s9 5.2 9 8-3.8 8-9 8-9-5.2-9-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </span>
               </label>
               {notice && <div className="login-notice">{notice}</div>}
               {error && <div className="login-error">{error}</div>}
@@ -1470,6 +1521,7 @@ function RanaApp({ authUser }) {
   const [wizardForm, setWizardForm] = useState(savedState?.wizardForm || defaultWizardForm)
   const [copyStatus, setCopyStatus] = useState('Copy all output')
   const [uploadedFiles, setUploadedFiles] = useState(savedState?.uploadedFiles || [])
+  const [sessionMessageCount, setSessionMessageCount] = useState(() => getSessionUsage(savedState))
   const [runHagen, setRunHagen] = useState(savedState?.runHagen || false)
   const [provider, setProvider] = useState(savedState?.provider || DEFAULT_PROVIDER)
   const [model, setModel] = useState(
@@ -1583,6 +1635,7 @@ Additional notes: ${wizardForm.catatan}
       wizardStep,
       wizardForm,
       uploadedFiles,
+      sessionMessageCount,
       runHagen,
       provider,
       model,
@@ -1590,7 +1643,7 @@ Additional notes: ${wizardForm.catatan}
       additionalInput,
     }
     persistSession(state)
-  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, runHagen, provider, model, result, additionalInput, loading, userId, historyReady, persistSession])
+  }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, sessionMessageCount, runHagen, provider, model, result, additionalInput, loading, userId, historyReady, persistSession])
 
   useEffect(() => {
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
@@ -1633,6 +1686,7 @@ Additional notes: ${wizardForm.catatan}
     setWizardStep(nextState.wizardStep || 1)
     setWizardForm(nextState.wizardForm || defaultWizardForm)
     setUploadedFiles(nextState.uploadedFiles || [])
+    setSessionMessageCount(getSessionUsage(nextState))
     setRunHagen(nextState.runHagen || false)
     const nextProvider = nextState.provider || DEFAULT_PROVIDER
     setProvider(nextProvider)
@@ -1948,21 +2002,21 @@ Additional notes: ${wizardForm.catatan}
   const stepOneValid = (
     isMeaningfulText(wizardForm.namaProduk, 2) &&
     isMeaningfulText(wizardForm.kategori, 2) &&
-    isMeaningfulText(wizardForm.keunggulan, 8)
+    isMeaningfulText(wizardForm.keunggulan, 2)
   )
   const stepTwoValid = (
-    isMeaningfulText(wizardForm.targetAudience, 8) &&
-    isMeaningfulText(wizardForm.painPoint, 8) &&
+    isMeaningfulText(wizardForm.targetAudience, 2) &&
+    isMeaningfulText(wizardForm.painPoint, 2) &&
     isMeaningfulText(wizardForm.harga, 2)
   )
   const stepThreeValid = wizardForm.platform.length > 0
   const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
   const canRun = stepOneValid && stepTwoValid && stepThreeValid
   const canContinue = isMeaningfulText(additionalInput, 8)
-  const activeSessionState = { productContext, wizardForm, uploadedFiles, additionalInput, result }
+  const activeSessionState = { productContext, wizardForm, uploadedFiles, sessionMessageCount, additionalInput, result }
   const sessionUsage = getSessionUsage(activeSessionState)
-  const sessionUsagePercent = Math.min(100, Math.round((sessionUsage / MAX_SESSION_CHARS) * 100))
-  const sessionLimitReached = sessionUsage >= MAX_SESSION_CHARS
+  const sessionUsagePercent = getSessionUsagePercent(sessionUsage)
+  const sessionLimitReached = sessionUsage >= MAX_SESSION_MESSAGES
   const newChatDisabled = loading || sessionList.some(session => {
     const state = session.id === sessionId ? activeSessionState : readSessionState(session.id)
     return isSessionUnusedState(state)
@@ -1973,6 +2027,7 @@ Additional notes: ${wizardForm.catatan}
       try {
         const res = await uploadFile(sessionId, file, userId)
         setUploadedFiles(prev => [...prev, { name: file.name, preview: res.preview }])
+        setSessionMessageCount(prev => res.memory_message_count ?? (prev + 1))
       } catch (error) {
         setError(`Upload failed: ${file.name}. ${error.message}`)
       }
@@ -2011,12 +2066,14 @@ Additional notes: ${wizardForm.catatan}
         simulateSteps()
       ])
       setResult(data)
+      setSessionMessageCount(data.memory_message_count ?? Math.min(MAX_SESSION_MESSAGES, sessionMessageCount + 6))
       setShowFeedback(true)
       await persistSession({
         productContext,
         wizardStep,
         wizardForm,
         uploadedFiles,
+        sessionMessageCount: data.memory_message_count ?? Math.min(MAX_SESSION_MESSAGES, sessionMessageCount + 6),
         runHagen,
         provider,
         model,
@@ -2051,6 +2108,7 @@ Additional notes: ${wizardForm.catatan}
         simulateSteps()
       ])
       setResult(data)
+      setSessionMessageCount(data.memory_message_count ?? Math.min(MAX_SESSION_MESSAGES, sessionMessageCount + 7))
       setAdditionalInput('')
       const nextProductContext = `${productContext.trim()}\n\nAdditional input:\n${note}`
       setProductContext(nextProductContext)
@@ -2060,6 +2118,7 @@ Additional notes: ${wizardForm.catatan}
         wizardStep,
         wizardForm,
         uploadedFiles,
+        sessionMessageCount: data.memory_message_count ?? Math.min(MAX_SESSION_MESSAGES, sessionMessageCount + 7),
         runHagen,
         provider,
         model,
@@ -2093,6 +2152,7 @@ Additional notes: ${wizardForm.catatan}
       catatan: ''
     })
     setUploadedFiles([])
+    setSessionMessageCount(0)
     setRunHagen(false)
     setProvider(DEFAULT_PROVIDER)
     setModel(getDefaultModel(DEFAULT_PROVIDER))
@@ -2318,7 +2378,7 @@ Additional notes: ${wizardForm.catatan}
               >
                 <span className="history-item-title">{session.title || 'New conversation'}</span>
                 <span className="history-item-meta">
-                  {session.hasResult ? 'Completed' : 'Draft'} - {Math.min(100, Math.round(((session.usage || 0) / MAX_SESSION_CHARS) * 100))}%
+                  {session.hasResult ? 'Completed' : 'Draft'} - {getSessionUsagePercent(getStoredSessionUsage(session))}%
                 </span>
               </button>
               <button
@@ -2343,7 +2403,7 @@ Additional notes: ${wizardForm.catatan}
       <div className={`app-page ${sidebarOpen ? 'with-history' : ''}`}>
         {/* LEFT PANEL */}
         <div className="app-left-panel">
-          <div className={`session-meter ${sessionUsage >= SESSION_WARNING_CHARS ? 'warning' : ''}`}>
+          <div className={`session-meter ${sessionUsage >= SESSION_WARNING_MESSAGES ? 'warning' : ''}`}>
             <div className="session-meter-row">
               <span>Session context</span>
               <span>{sessionUsagePercent}%</span>
@@ -2354,7 +2414,7 @@ Additional notes: ${wizardForm.catatan}
             <p>
               {sessionLimitReached
                 ? 'Session limit reached. Start a new chat for cleaner results.'
-                : sessionUsage >= SESSION_WARNING_CHARS
+                : sessionUsage >= SESSION_WARNING_MESSAGES
                   ? 'This chat is getting long. A new chat will protect quality and quota.'
                   : 'Keep each session focused for better agent output.'}
             </p>
@@ -2377,7 +2437,7 @@ Additional notes: ${wizardForm.catatan}
             {wizardStep === 1 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label htmlFor="namaProduk" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Product name</label>
+                  <label htmlFor="namaProduk" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Product name *</label>
                   <input
                     id="namaProduk"
                     name="namaProduk"
@@ -2388,7 +2448,7 @@ Additional notes: ${wizardForm.catatan}
                   />
                 </div>
                 <div>
-                  <label htmlFor="kategori" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Category / niche</label>
+                  <label htmlFor="kategori" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Category / niche *</label>
                   <input
                     id="kategori"
                     name="kategori"
@@ -2400,7 +2460,7 @@ Additional notes: ${wizardForm.catatan}
                   />
                 </div>
                 <div>
-                  <label htmlFor="keunggulan" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Main product advantage</label>
+                  <label htmlFor="keunggulan" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Main product advantage *</label>
                   <textarea
                     id="keunggulan"
                     name="keunggulan"
@@ -2418,7 +2478,7 @@ Additional notes: ${wizardForm.catatan}
             {wizardStep === 2 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label htmlFor="targetAudience" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Who is the target buyer?</label>
+                  <label htmlFor="targetAudience" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Who is the target buyer? *</label>
                   <input
                     id="targetAudience"
                     name="targetAudience"
@@ -2429,7 +2489,7 @@ Additional notes: ${wizardForm.catatan}
                   />
                 </div>
                 <div>
-                  <label htmlFor="painPoint" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>What is their biggest problem?</label>
+                  <label htmlFor="painPoint" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>What is their biggest problem? *</label>
                   <textarea
                     id="painPoint"
                     name="painPoint"
@@ -2442,7 +2502,7 @@ Additional notes: ${wizardForm.catatan}
                   />
                 </div>
                 <div>
-                  <label htmlFor="harga" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Product price range</label>
+                  <label htmlFor="harga" style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, display: 'block' }}>Product price range *</label>
                   <input
                     id="harga"
                     name="harga"
@@ -2460,7 +2520,7 @@ Additional notes: ${wizardForm.catatan}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Ad platforms
+                    Ad platforms *
                   </div>
                   <div className="two-col-grid" style={{ gap: 10 }}>
                     {['FB/IG Ads', 'TikTok Ads', 'YouTube Ads', 'Google Ads'].map(platform => (
