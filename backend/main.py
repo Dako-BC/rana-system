@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Optional, Annotated
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile, File, Form, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -64,6 +64,19 @@ FIREBASE_AUTH_REQUIRED = os.environ.get("FIREBASE_AUTH_REQUIRED", "true").lower(
     "false",
     "no",
 }
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+TELEGRAM_ALLOWED_USER_IDS = {
+    item.strip()
+    for item in os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").split(",")
+    if item.strip()
+}
+TELEGRAM_DEFAULT_RUN_HAGEN = os.environ.get("TELEGRAM_DEFAULT_RUN_HAGEN", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+TELEGRAM_MESSAGE_LIMIT = 3500
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
@@ -1524,21 +1537,20 @@ def anthropic_http_exception(api_err: APIError) -> HTTPException:
     )
 
 
-@app.post("/api/run")
-async def run_agents(
-    request: RunRequest,
-    claims: dict[str, Any] = Depends(require_firebase_user),
-):
-    """Run the full multi-agent pipeline."""
-    user_id = resolve_authenticated_user_id(request.user_id, claims)
-    validate_product_context(request.product_context)
-    ensure_session_capacity(
-        request.session_id, user_id, added_messages=6)
-    history = get_memory(request.session_id, user_id)
+async def run_rana_pipeline(
+    session_id: str,
+    user_id: str,
+    product_context: str,
+    run_hagen: bool = False,
+    opts: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    validate_product_context(product_context)
+    ensure_session_capacity(session_id, user_id, added_messages=6)
+    history = get_memory(session_id, user_id)
 
     initial_state: AgentState = {
-        "session_id": request.session_id,
-        "product_context": request.product_context,
+        "session_id": session_id,
+        "product_context": product_context,
         "uploaded_files": [],
         "hara_output": None,
         "bombom_output": None,
@@ -1547,31 +1559,28 @@ async def run_agents(
         "rana_decision": None,
         "current_step": "start",
         "messages": history,
-        "run_hagen": request.run_hagen,
-        "opts": request.opts,
+        "run_hagen": run_hagen,
+        "opts": opts,
     }
 
-    validate_opts(request.opts)
+    validate_opts(opts)
 
     try:
         result = await asyncio.to_thread(compiled_graph.invoke, initial_state)
     except HTTPException:
         raise
     except APIError as api_err:
-        logger.exception("Anthropic API error during run_agents")
+        logger.exception("Anthropic API error during run_rana_pipeline")
         raise anthropic_http_exception(api_err)
     except Exception as err:
-        logger.exception("Unhandled error during run_agents")
-        raise HTTPException(
-            status_code=500,
-            detail=str(err)
-        )
+        logger.exception("Unhandled error during run_rana_pipeline")
+        raise HTTPException(status_code=500, detail=str(err))
 
-    save_memory(request.session_id, result["messages"], user_id)
-    memory_message_count = len(get_memory(request.session_id, user_id))
+    save_memory(session_id, result["messages"], user_id)
+    memory_message_count = len(get_memory(session_id, user_id))
 
     return {
-        "session_id": request.session_id,
+        "session_id": session_id,
         "hara_output": result.get("hara_output"),
         "bombom_output": result.get("bombom_output"),
         "luna_output": result.get("luna_output"),
@@ -1580,6 +1589,270 @@ async def run_agents(
         "steps_completed": result.get("current_step"),
         "memory_message_count": memory_message_count,
     }
+
+
+telegram_sessions: dict[str, dict[str, Any]] = {}
+
+
+def telegram_user_id(from_user: Optional[dict[str, Any]]) -> Optional[str]:
+    if not from_user:
+        return None
+    raw_id = from_user.get("id")
+    if raw_id is None:
+        return None
+    return str(raw_id)
+
+
+def telegram_internal_user_id(raw_user_id: str) -> str:
+    return f"telegram_{raw_user_id}"
+
+
+def get_telegram_session(raw_user_id: str) -> dict[str, Any]:
+    session = telegram_sessions.get(raw_user_id)
+    if not session:
+        session = {
+            "session_id": f"telegram_{raw_user_id}",
+            "product_context": "",
+        }
+        telegram_sessions[raw_user_id] = session
+    return session
+
+
+def reset_telegram_session(raw_user_id: str) -> dict[str, Any]:
+    user_id = telegram_internal_user_id(raw_user_id)
+    old_session = get_telegram_session(raw_user_id)
+    session_memory.pop(memory_key(old_session["session_id"], user_id), None)
+    session = {
+        "session_id": f"telegram_{raw_user_id}_{int(asyncio.get_event_loop().time())}",
+        "product_context": "",
+    }
+    telegram_sessions[raw_user_id] = session
+    return session
+
+
+def telegram_help_text() -> str:
+    return (
+        "Halo, ini Rana via Telegram.\n\n"
+        "Kirim brief produk dengan format ini:\n\n"
+        "Product name:\n"
+        "Category:\n"
+        "Key advantage:\n"
+        "Target audience:\n"
+        "Pain point:\n"
+        "Price range:\n"
+        "Ad platforms:\n\n"
+        "Command:\n"
+        "/new - mulai session baru\n"
+        "/help - lihat format input\n"
+        "/run - jalankan ulang brief terakhir\n"
+        "/continue <tambahan> - tambah konteks untuk session terakhir"
+    )
+
+
+def format_telegram_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = str(exc.detail)
+        if exc.status_code == 400 and "Product context" in detail:
+            return f"Brief belum lengkap.\n\n{detail}\n\nKetik /help untuk lihat format yang dibutuhkan."
+        if exc.status_code == 429:
+            return f"Session ini sudah terlalu panjang.\n\n{detail}\n\nKetik /new untuk mulai session baru."
+        return f"Rana belum bisa memproses request ini.\n\n{detail}"
+    return f"Rana mengalami error saat memproses request.\n\n{type(exc).__name__}: {exc}"
+
+
+def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
+    if not raw:
+        return ""
+    text = str(raw).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    if not isinstance(parsed, dict):
+        return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+    priority_keys = [
+        "final_decision",
+        "recommendation",
+        "user_summary",
+        "ad_insight",
+        "main_pain_point",
+        "winning_concept",
+        "concept",
+        "headline",
+        "script",
+    ]
+    lines = []
+    for key in priority_keys:
+        value = parsed.get(key)
+        if value:
+            lines.append(f"{key.replace('_', ' ').title()}: {value}")
+    if lines:
+        return "\n".join(lines)
+    return json.dumps({fallback_key: parsed}, ensure_ascii=False, indent=2)
+
+
+def format_rana_result_for_telegram(result: dict[str, Any]) -> str:
+    sections = [
+        ("RANA DECISION", summarize_json_text(result.get("rana_decision"), "rana_decision")),
+        ("HARA INSIGHT", summarize_json_text(result.get("hara_output"), "hara_output")),
+        ("BOMBOM ADS", summarize_json_text(result.get("bombom_output"), "bombom_output")),
+        ("LUNA VIDEO", summarize_json_text(result.get("luna_output"), "luna_output")),
+        ("HAGEN SCRIPT", summarize_json_text(result.get("hagen_output"), "hagen_output")),
+    ]
+    rendered = []
+    for title, body in sections:
+        if body:
+            rendered.append(f"{title}\n{body}")
+    if not rendered:
+        return "Rana selesai, tapi tidak ada output terstruktur yang bisa ditampilkan."
+    return "\n\n---\n\n".join(rendered)
+
+
+def split_telegram_message(text: str) -> list[str]:
+    text = str(text or "")
+    if len(text) <= TELEGRAM_MESSAGE_LIMIT:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while len(remaining) > TELEGRAM_MESSAGE_LIMIT:
+        split_at = remaining.rfind("\n\n", 0, TELEGRAM_MESSAGE_LIMIT)
+        if split_at < TELEGRAM_MESSAGE_LIMIT // 2:
+            split_at = TELEGRAM_MESSAGE_LIMIT
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def send_telegram_message(chat_id: int | str, text: str) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN is not configured; cannot send Telegram message.")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for chunk in split_telegram_message(text):
+            response = await client.post(url, json={
+                "chat_id": chat_id,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            })
+            if response.status_code >= 400:
+                logger.warning("Telegram sendMessage failed: %s %s", response.status_code, response.text)
+
+
+async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) -> None:
+    text = str(text or "").strip()
+    session = get_telegram_session(raw_user_id)
+
+    if not text or text.startswith("/start") or text.startswith("/help"):
+        await send_telegram_message(chat_id, telegram_help_text())
+        return
+
+    if text.startswith("/new"):
+        reset_telegram_session(raw_user_id)
+        await send_telegram_message(chat_id, "Session baru sudah dibuat. Kirim brief produk lengkap untuk mulai.")
+        return
+
+    if text.startswith("/run"):
+        if not session.get("product_context"):
+            await send_telegram_message(chat_id, "Belum ada brief tersimpan. Kirim brief produk dulu, atau ketik /help.")
+            return
+        product_context = session["product_context"]
+    elif text.startswith("/continue"):
+        additional_input = text.replace("/continue", "", 1).strip()
+        if not session.get("product_context"):
+            await send_telegram_message(chat_id, "Belum ada brief tersimpan. Kirim brief produk dulu sebelum continue.")
+            return
+        if not is_meaningful_text(additional_input, 8):
+            await send_telegram_message(chat_id, "Tambahan konteks terlalu pendek. Contoh: /continue target utamanya ibu bekerja usia 25-40.")
+            return
+        product_context = f"""{session["product_context"].strip()}
+
+Additional context:
+{additional_input}
+"""
+        session["product_context"] = product_context
+    else:
+        product_context = text
+        session["product_context"] = product_context
+
+    await send_telegram_message(chat_id, "Rana mulai memproses brief. Ini bisa butuh beberapa menit.")
+    try:
+        result = await run_rana_pipeline(
+            session["session_id"],
+            telegram_internal_user_id(raw_user_id),
+            product_context,
+            TELEGRAM_DEFAULT_RUN_HAGEN,
+            None,
+        )
+    except Exception as exc:
+        logger.exception("Telegram Rana run failed")
+        await send_telegram_message(chat_id, format_telegram_error(exc))
+        return
+
+    await send_telegram_message(chat_id, format_rana_result_for_telegram(result))
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(
+    update: dict[str, Any],
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(None),
+):
+    """Receive Telegram updates and run Rana for allowed Telegram users."""
+    if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret.")
+
+    message = update.get("message") or update.get("edited_message") or {}
+    chat = message.get("chat") or {}
+    from_user = message.get("from") or {}
+    chat_id = chat.get("id")
+    raw_user_id = telegram_user_id(from_user)
+    text = str(message.get("text") or "").strip()
+
+    if not chat_id or not raw_user_id:
+        return {"status": "ignored"}
+
+    if TELEGRAM_ALLOWED_USER_IDS and raw_user_id not in TELEGRAM_ALLOWED_USER_IDS:
+        background_tasks.add_task(
+            send_telegram_message,
+            chat_id,
+            "Akses Telegram bot Rana belum diizinkan untuk akun ini. Kirim user ID ini ke admin: "
+            f"{raw_user_id}",
+        )
+        return {"status": "forbidden"}
+
+    if not text:
+        background_tasks.add_task(
+            send_telegram_message,
+            chat_id,
+            "Saat ini Rana Telegram hanya menerima pesan teks. Ketik /help untuk format brief.",
+        )
+        return {"status": "unsupported"}
+
+    background_tasks.add_task(handle_telegram_text, chat_id, raw_user_id, text)
+    return {"status": "accepted"}
+
+
+@app.post("/api/run")
+async def run_agents(
+    request: RunRequest,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
+    """Run the full multi-agent pipeline."""
+    user_id = resolve_authenticated_user_id(request.user_id, claims)
+    return await run_rana_pipeline(
+        request.session_id,
+        user_id,
+        request.product_context,
+        request.run_hagen,
+        request.opts,
+    )
 
 
 @app.post("/api/continue")
@@ -1804,4 +2077,6 @@ async def health():
         "agents": ["Rana", "Hara", "Bombom", "Luna", "Hagen"],
         "firebase_auth_required": FIREBASE_AUTH_REQUIRED,
         "firebase_admin_ready": FIREBASE_ADMIN_READY,
+        "telegram_bot_configured": bool(TELEGRAM_BOT_TOKEN),
+        "telegram_allowed_users_configured": bool(TELEGRAM_ALLOWED_USER_IDS),
     }
