@@ -1437,9 +1437,9 @@ def validate_product_context(product_context: str) -> None:
     required_fields = {
         "product name": 2,
         "category": 2,
-        "key advantage": 8,
-        "target audience": 8,
-        "pain point": 8,
+        "key advantage": 2,
+        "target audience": 2,
+        "pain point": 2,
         "price range": 2,
         "ad platforms": 2,
     }
