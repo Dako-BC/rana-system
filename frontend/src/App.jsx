@@ -2321,9 +2321,9 @@ Additional notes: ${wizardForm.catatan}
             onClick={e => e.stopPropagation()}
           >
             <div className="confirm-modal-kicker">Delete history</div>
-            <h2 id="delete-history-title">Hapus history ini?</h2>
+            <h2 id="delete-history-title">Delete this history?</h2>
             <p>
-              History "{deleteTarget.title || 'New conversation'}" akan dihapus dari akun ini dan tidak bisa dikembalikan.
+              History "{deleteTarget.title || 'New conversation'}" will be permanently deleted from this account.
             </p>
             <div className="confirm-modal-actions">
               <button
@@ -2331,14 +2331,14 @@ Additional notes: ${wizardForm.catatan}
                 className="confirm-modal-secondary"
                 onClick={() => setDeleteTarget(null)}
               >
-                Batal
+                Cancel
               </button>
               <button
                 type="button"
                 className="confirm-modal-primary"
                 onClick={handleConfirmDeleteSession}
               >
-                Hapus
+                Delete
               </button>
             </div>
           </div>
