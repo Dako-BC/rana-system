@@ -56,7 +56,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_DIR = Path(os.environ.get("RANA_DATA_DIR", Path(__file__).resolve().parent / "data"))
+DATA_DIR = Path(os.environ.get("RANA_DATA_DIR",
+                Path(__file__).resolve().parent / "data"))
 HISTORY_DB_PATH = DATA_DIR / "history.json"
 history_db_lock = threading.Lock()
 FIREBASE_AUTH_REQUIRED = os.environ.get("FIREBASE_AUTH_REQUIRED", "true").lower() not in {
@@ -111,8 +112,10 @@ def initialize_firebase_admin() -> bool:
             service_account = json.loads(service_account_json)
             private_key = service_account.get("private_key")
             if isinstance(private_key, str):
-                service_account["private_key"] = private_key.replace("\\n", "\n")
-            firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
+                service_account["private_key"] = private_key.replace(
+                    "\\n", "\n")
+            firebase_admin.initialize_app(
+                firebase_credentials.Certificate(service_account))
         else:
             options = {"projectId": project_id} if project_id else None
             firebase_admin.initialize_app(options=options)
@@ -162,7 +165,8 @@ def resolve_authenticated_user_id(
 
     if FIREBASE_AUTH_REQUIRED:
         if not token_uid:
-            raise HTTPException(status_code=401, detail="Firebase token is missing a uid claim.")
+            raise HTTPException(
+                status_code=401, detail="Firebase token is missing a uid claim.")
         if provided and provided != token_uid:
             raise HTTPException(
                 status_code=403,
@@ -174,6 +178,7 @@ def resolve_authenticated_user_id(
     if not resolved:
         raise HTTPException(status_code=400, detail="user_id is required")
     return resolved
+
 
 # Model configuration.
 PROVIDER_MODELS = {
@@ -1421,7 +1426,8 @@ def write_history_db(data: dict[str, Any]) -> None:
     with history_db_lock:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         tmp_path = HISTORY_DB_PATH.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp_path.write_text(json.dumps(
+            data, ensure_ascii=False), encoding="utf-8")
         tmp_path.replace(HISTORY_DB_PATH)
 
 
@@ -1443,6 +1449,31 @@ def extract_context_fields(product_context: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         fields[key.strip().lower()] = value.strip()
     return fields
+
+
+def extract_provider_opts_from_context(product_context: str) -> dict[str, str] | None:
+    fields = extract_context_fields(product_context)
+    provider = fields.get("provider")
+    model = fields.get("model")
+    if not provider:
+        return None
+    opts: dict[str, str] = {"provider": provider.lower()}
+    if model:
+        opts["model"] = model
+    return opts
+
+
+def parse_provider_opts_from_command(text: str) -> dict[str, str] | None:
+    parts = text.strip().split()
+    if not parts or parts[0] != "/provider":
+        return None
+    if len(parts) < 2:
+        return {}
+    provider = parts[1].lower()
+    opts: dict[str, str] = {"provider": provider}
+    if len(parts) > 2:
+        opts["model"] = parts[2]
+    return opts
 
 
 def validate_product_context(product_context: str) -> None:
@@ -1613,6 +1644,7 @@ def get_telegram_session(raw_user_id: str) -> dict[str, Any]:
         session = {
             "session_id": f"telegram_{raw_user_id}",
             "product_context": "",
+            "opts": {},
         }
         telegram_sessions[raw_user_id] = session
     return session
@@ -1625,6 +1657,7 @@ def reset_telegram_session(raw_user_id: str) -> dict[str, Any]:
     session = {
         "session_id": f"telegram_{raw_user_id}_{int(asyncio.get_event_loop().time())}",
         "product_context": "",
+        "opts": {},
     }
     telegram_sessions[raw_user_id] = session
     return session
@@ -1645,7 +1678,12 @@ def telegram_help_text() -> str:
         "/new - mulai session baru\n"
         "/help - lihat format input\n"
         "/run - jalankan ulang brief terakhir\n"
-        "/continue <tambahan> - tambah konteks untuk session terakhir"
+        "/continue <tambahan> - tambah konteks untuk session terakhir\n"
+        "/provider <provider> [model] - pilih provider untuk session ini\n"
+        "/list providers - lihat provider yang didukung\n"
+        "/list models <provider> - lihat model untuk provider tertentu\n"
+        "/status - lihat provider/model yang aktif untuk sesi ini\n\n"
+        "Provider juga bisa ditentukan di brief dengan baris: Provider: openai"
     )
 
 
@@ -1695,11 +1733,15 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
 
 def format_rana_result_for_telegram(result: dict[str, Any]) -> str:
     sections = [
-        ("RANA DECISION", summarize_json_text(result.get("rana_decision"), "rana_decision")),
-        ("HARA INSIGHT", summarize_json_text(result.get("hara_output"), "hara_output")),
-        ("BOMBOM ADS", summarize_json_text(result.get("bombom_output"), "bombom_output")),
+        ("RANA DECISION", summarize_json_text(
+            result.get("rana_decision"), "rana_decision")),
+        ("HARA INSIGHT", summarize_json_text(
+            result.get("hara_output"), "hara_output")),
+        ("BOMBOM ADS", summarize_json_text(
+            result.get("bombom_output"), "bombom_output")),
         ("LUNA VIDEO", summarize_json_text(result.get("luna_output"), "luna_output")),
-        ("HAGEN SCRIPT", summarize_json_text(result.get("hagen_output"), "hagen_output")),
+        ("HAGEN SCRIPT", summarize_json_text(
+            result.get("hagen_output"), "hagen_output")),
     ]
     rendered = []
     for title, body in sections:
@@ -1730,7 +1772,8 @@ def split_telegram_message(text: str) -> list[str]:
 
 async def send_telegram_message(chat_id: int | str, text: str) -> None:
     if not TELEGRAM_BOT_TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN is not configured; cannot send Telegram message.")
+        logger.warning(
+            "TELEGRAM_BOT_TOKEN is not configured; cannot send Telegram message.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -1742,7 +1785,31 @@ async def send_telegram_message(chat_id: int | str, text: str) -> None:
                 "disable_web_page_preview": True,
             })
             if response.status_code >= 400:
-                logger.warning("Telegram sendMessage failed: %s %s", response.status_code, response.text)
+                logger.warning("Telegram sendMessage failed: %s %s",
+                               response.status_code, response.text)
+
+
+def telegram_list_providers_text() -> str:
+    return "Provider tersedia: " + ", ".join(sorted(PROVIDER_MODELS.keys()))
+
+
+def telegram_list_models_text(provider: str) -> str:
+    provider_lower = provider.lower()
+    if provider_lower not in PROVIDER_MODELS:
+        supported = ", ".join(sorted(PROVIDER_MODELS.keys()))
+        return (
+            f"Provider '{provider}' tidak dikenal. Provider yang didukung: {supported}."
+        )
+    models = PROVIDER_MODELS[provider_lower]
+    return f"Model untuk {provider_lower}: " + ", ".join(models)
+
+
+def telegram_session_status(session: dict[str, Any]) -> str:
+    opts = session.get("opts") or {}
+    provider = opts.get("provider", "anthropic")
+    model = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER.get(
+        provider, "(default)")
+    return f"Provider aktif: {provider}, Model aktif: {model}"
 
 
 async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) -> None:
@@ -1756,6 +1823,55 @@ async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) 
     if text.startswith("/new"):
         reset_telegram_session(raw_user_id)
         await send_telegram_message(chat_id, "Session baru sudah dibuat. Kirim brief produk lengkap untuk mulai.")
+        return
+
+    if text.startswith("/status"):
+        await send_telegram_message(chat_id, telegram_session_status(session))
+        return
+
+    if text.startswith("/list"):
+        parts = text.split()
+        if len(parts) == 1:
+            await send_telegram_message(
+                chat_id,
+                "Gunakan /list providers atau /list models <provider>."
+            )
+            return
+        if parts[1] == "providers":
+            await send_telegram_message(chat_id, telegram_list_providers_text())
+            return
+        if parts[1] == "models":
+            if len(parts) < 3:
+                await send_telegram_message(
+                    chat_id,
+                    "Gunakan /list models <provider>. Contoh: /list models openai"
+                )
+                return
+            await send_telegram_message(chat_id, telegram_list_models_text(parts[2]))
+            return
+        await send_telegram_message(
+            chat_id,
+            "Perintah /list tidak dikenal. Gunakan /list providers atau /list models <provider>."
+        )
+        return
+
+    if text.startswith("/provider"):
+        opts = parse_provider_opts_from_command(text)
+        if not opts or not opts.get("provider"):
+            supported = ", ".join(sorted(PROVIDER_MODELS.keys()))
+            await send_telegram_message(
+                chat_id,
+                f"Gunakan: /provider <provider> [model].\nContoh: /provider openai gpt-4o-mini\nProvider tersedia: {supported}"
+            )
+            return
+        try:
+            validate_opts(opts)
+        except HTTPException as exc:
+            await send_telegram_message(chat_id, format_telegram_error(exc))
+            return
+        session["opts"] = opts
+        model_note = f" model {opts['model']}" if opts.get("model") else ""
+        await send_telegram_message(chat_id, f"Provider Telegram disetel ke {opts['provider']}{model_note}.")
         return
 
     if text.startswith("/run"):
@@ -1781,14 +1897,19 @@ Additional context:
         product_context = text
         session["product_context"] = product_context
 
+    provider_opts = extract_provider_opts_from_context(product_context)
+    if provider_opts:
+        session["opts"] = provider_opts
+
     await send_telegram_message(chat_id, "Rana mulai memproses brief. Ini bisa butuh beberapa menit.")
+    await send_telegram_message(chat_id, telegram_session_status(session))
     try:
         result = await run_rana_pipeline(
             session["session_id"],
             telegram_internal_user_id(raw_user_id),
             product_context,
             TELEGRAM_DEFAULT_RUN_HAGEN,
-            None,
+            session.get("opts"),
         )
     except Exception as exc:
         logger.exception("Telegram Rana run failed")
@@ -1806,7 +1927,8 @@ async def telegram_webhook(
 ):
     """Receive Telegram updates and run Rana for allowed Telegram users."""
     if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret.")
+        raise HTTPException(
+            status_code=403, detail="Invalid Telegram webhook secret.")
 
     message = update.get("message") or update.get("edited_message") or {}
     chat = message.get("chat") or {}
