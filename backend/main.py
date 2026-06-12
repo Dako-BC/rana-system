@@ -1696,7 +1696,8 @@ def telegram_help_text() -> str:
         "/provider <provider> [model] - pilih provider untuk session ini\n"
         "/list providers - lihat provider yang didukung\n"
         "/list models <provider> - lihat model untuk provider tertentu\n"
-        "/status - lihat provider/model yang aktif untuk sesi ini\n\n"
+        "/status - lihat provider/model yang aktif untuk sesi ini\n"
+        "/full - lihat hasil JSON lengkap dari run terakhir\n\n"
         "Provider juga bisa ditentukan di brief dengan baris: Provider: openai"
     )
 
@@ -1767,8 +1768,8 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
         value = parsed.get(key)
         if value:
             if isinstance(value, (list, dict)):
-                lines.append(
-                    f"{key.replace('_', ' ').title()}: {json.dumps(value, ensure_ascii=False)}")
+                pretty = json.dumps(value, ensure_ascii=False, indent=2)
+                lines.append(f"{key.replace('_', ' ').title()}:\n{pretty}")
             else:
                 lines.append(f"{key.replace('_', ' ').title()}: {value}")
     if lines:
@@ -1778,25 +1779,103 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
     return json.dumps({fallback_key: parsed}, ensure_ascii=False, indent=2)
 
 
+def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
+    """Compact summary for Telegram: key field + top 2-3 items."""
+    if not raw:
+        return ""
+    text = str(raw).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text[:100]  # Just first 100 chars if not JSON
+
+    if not isinstance(parsed, dict):
+        return str(parsed)[:100]
+
+    # Unwrap wrapper
+    if len(parsed) == 1:
+        key = next(iter(parsed))
+        inner = parsed.get(key)
+        if isinstance(inner, dict):
+            parsed = inner
+
+    # Unwrap raw_output if present
+    if "raw_output" in parsed and isinstance(parsed.get("raw_output"), str):
+        try:
+            parsed = json.loads(parsed["raw_output"])
+        except Exception:
+            pass
+
+    lines = []
+
+    # Section-specific extraction
+    if section_name == "rana_decision":
+        if "user_summary" in parsed:
+            lines.append(str(parsed["user_summary"])[:200])
+
+    elif section_name == "hara_output":
+        if "awareness_level" in parsed:
+            lines.append(
+                f"{parsed['awareness_level']} -> {parsed.get('awareness_target', 'N/A')}")
+        if "psychological_triggers" in parsed and isinstance(parsed["psychological_triggers"], list):
+            triggers = parsed["psychological_triggers"][:2]
+            for t in triggers:
+                if isinstance(t, dict) and "trigger" in t:
+                    lines.append(f"  - {t['trigger']}")
+
+    elif section_name == "bombom_output":
+        if "concepts" in parsed and isinstance(parsed["concepts"], list):
+            concepts = parsed["concepts"][:3]
+            for i, c in enumerate(concepts, 1):
+                if isinstance(c, dict) and "headline" in c:
+                    lines.append(f"{i}. {c['headline'][:60]}")
+
+    elif section_name == "luna_output":
+        if "concepts" in parsed and isinstance(parsed["concepts"], list):
+            concepts = parsed["concepts"][:3]
+            for i, c in enumerate(concepts, 1):
+                if isinstance(c, dict):
+                    name = c.get("name") or c.get("concept_name", "Concept")
+                    lines.append(f"{i}. {name}")
+
+    elif section_name == "hagen_output":
+        if "execution_script" in parsed:
+            lines.append(str(parsed["execution_script"])[:150])
+        elif "script" in parsed:
+            lines.append(str(parsed["script"])[:150])
+
+    if lines:
+        return "\n".join(lines)
+    return ""
+
+
 def format_rana_result_for_telegram(result: dict[str, Any]) -> str:
     sections = [
-        ("RANA DECISION", summarize_json_text(
+        ("RANA DECISION", summarize_json_text_compact(
             result.get("rana_decision"), "rana_decision")),
-        ("HARA INSIGHT", summarize_json_text(
+        ("HARA INSIGHT", summarize_json_text_compact(
             result.get("hara_output"), "hara_output")),
-        ("BOMBOM ADS", summarize_json_text(
+        ("BOMBOM ADS", summarize_json_text_compact(
             result.get("bombom_output"), "bombom_output")),
-        ("LUNA VIDEO", summarize_json_text(result.get("luna_output"), "luna_output")),
-        ("HAGEN SCRIPT", summarize_json_text(
-            result.get("hagen_output"), "hagen_output")),
+        ("LUNA VIDEO", summarize_json_text_compact(
+            result.get("luna_output"), "luna_output")),
     ]
+    hagen = summarize_json_text_compact(
+        result.get("hagen_output"), "hagen_output")
+    if hagen:
+        sections.append(("HAGEN SCRIPT", hagen))
+
     rendered = []
     for title, body in sections:
         if body:
             rendered.append(f"{title}\n{body}")
+
     if not rendered:
         return "Rana selesai, tapi tidak ada output terstruktur yang bisa ditampilkan."
-    return "\n\n---\n\n".join(rendered)
+
+    msg = "\n\n---\n\n".join(rendered)
+    msg += "\n\nKetik /full untuk lihat detail JSON lengkap."
+    return msg
 
 
 def split_telegram_message(text: str) -> list[str]:
@@ -1902,6 +1981,17 @@ async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) 
         )
         return
 
+    if text.startswith("/full"):
+        session = get_telegram_session(raw_user_id)
+        stored_result = session.get("last_result")
+        if not stored_result:
+            await send_telegram_message(chat_id, "Belum ada hasil untuk ditampilkan. Jalankan /run atau kirim brief dulu.")
+            return
+        full_json = json.dumps(stored_result, ensure_ascii=False, indent=2)
+        for chunk in split_telegram_message(full_json):
+            await send_telegram_message(chat_id, chunk)
+        return
+
     if text.startswith("/provider"):
         opts = parse_provider_opts_from_command(text)
         if not opts or not opts.get("provider"):
@@ -1964,6 +2054,7 @@ Additional context:
             TELEGRAM_DEFAULT_RUN_HAGEN,
             session.get("opts"),
         )
+        session["last_result"] = result
     except Exception as exc:
         logger.exception("Telegram Rana run failed")
         await send_telegram_message(chat_id, format_telegram_error(exc))
