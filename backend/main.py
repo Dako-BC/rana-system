@@ -228,6 +228,23 @@ API_KEYS = {
 }
 
 
+def get_available_providers() -> list[str]:
+    return [provider for provider in PROVIDER_MODELS if API_KEYS.get(provider)]
+
+
+def get_default_available_provider_opts() -> dict[str, str]:
+    available = get_available_providers()
+    if available:
+        provider = available[0]
+        return {"provider": provider, "model": DEFAULT_MODEL_BY_PROVIDER[provider]}
+    return {"provider": "anthropic", "model": DEFAULT_MODEL_BY_PROVIDER["anthropic"]}
+
+
+def get_default_available_provider_model() -> tuple[str, str]:
+    opts = get_default_available_provider_opts()
+    return opts["provider"], opts["model"]
+
+
 def get_model(model: str, provider: str) -> str:
     provider_models = PROVIDER_MODELS.get(provider)
     if not provider_models:
@@ -1515,7 +1532,12 @@ def validate_product_context(product_context: str) -> None:
 
 
 def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
-    provider = (opts or {}).get("provider", "anthropic")
+    opts = opts or {}
+    provider = opts.get("provider")
+    if not provider:
+        return get_default_available_provider_model()
+
+    provider = provider.strip().lower()
     supported_providers = set(PROVIDER_MODELS.keys())
     if provider not in supported_providers:
         raise HTTPException(
@@ -1525,8 +1547,16 @@ def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
                 f"Supported providers: {', '.join(sorted(supported_providers))}."
             ),
         )
-    model_name = (opts or {}).get(
-        "model") or DEFAULT_MODEL_BY_PROVIDER[provider]
+    if not API_KEYS.get(provider):
+        available = get_available_providers()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Provider '{provider}' is not configured for use in Telegram. "
+                f"Use one of the available providers: {', '.join(available) or 'none configured'}."
+            ),
+        )
+    model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     if model_name not in PROVIDER_MODELS[provider]:
         raise HTTPException(
             status_code=400,
@@ -1694,10 +1724,11 @@ def telegram_help_text() -> str:
         "/run - jalankan ulang brief terakhir\n"
         "/continue <tambahan> - tambah konteks untuk session terakhir\n"
         "/provider <provider> [model] - pilih provider untuk session ini\n"
-        "/list providers - lihat provider yang didukung\n"
+        "/list providers - lihat provider yang tersedia\n"
         "/list models <provider> - lihat model untuk provider tertentu\n"
         "/status - lihat provider/model yang aktif untuk sesi ini\n"
         "/full - lihat hasil JSON lengkap dari run terakhir\n\n"
+        "Provider/model akan dipilih otomatis jika tidak ditentukan."
         "Provider juga bisa ditentukan di brief dengan baris: Provider: openai"
     )
 
@@ -1928,7 +1959,13 @@ async def send_telegram_message(chat_id: int | str, text: str) -> None:
 
 
 def telegram_list_providers_text() -> str:
-    return "Provider tersedia: " + ", ".join(sorted(PROVIDER_MODELS.keys()))
+    available = get_available_providers()
+    if not available:
+        return (
+            "Tidak ada provider Telegram tersedia. "
+            "Pastikan minimal satu API key sudah disetel."
+        )
+    return "Provider tersedia: " + ", ".join(sorted(available))
 
 
 def telegram_list_models_text(provider: str) -> str:
@@ -1943,7 +1980,7 @@ def telegram_list_models_text(provider: str) -> str:
 
 
 def telegram_session_status(session: dict[str, Any]) -> str:
-    opts = session.get("opts") or {}
+    opts = session.get("opts") or get_default_available_provider_opts()
     provider = opts.get("provider", "anthropic")
     model = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER.get(
         provider, "(default)")
@@ -2007,7 +2044,7 @@ async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) 
     if text.startswith("/provider"):
         opts = parse_provider_opts_from_command(text)
         if not opts or not opts.get("provider"):
-            supported = ", ".join(sorted(PROVIDER_MODELS.keys()))
+            supported = ", ".join(sorted(get_available_providers()))
             await send_telegram_message(
                 chat_id,
                 f"Gunakan: /provider <provider> [model].\nContoh: /provider openai gpt-4o-mini\nProvider tersedia: {supported}"
@@ -2055,6 +2092,9 @@ Additional context:
             await send_telegram_message(chat_id, format_telegram_error(exc))
             return
         session["opts"] = normalized_opts
+
+    if not session.get("opts"):
+        session["opts"] = get_default_available_provider_opts()
 
     await send_telegram_message(chat_id, "Rana mulai memproses brief. Ini bisa butuh beberapa menit.")
     await send_telegram_message(chat_id, telegram_session_status(session))
