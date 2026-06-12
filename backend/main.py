@@ -1831,12 +1831,19 @@ def summarize_json_text_compact(raw: Optional[Any], section_name: str) -> str:
 
     parsed_dict: dict[str, Any] = parsed
 
-    # Unwrap wrapper
-    if len(parsed_dict) == 1:
+    # Unwrap wrappers recursively: keep unwrapping if single key and matches section_name or is generic wrapper
+    max_unwrap = 5
+    while len(parsed_dict) == 1 and max_unwrap > 0:
         key = next(iter(parsed_dict))
         inner = parsed_dict.get(key)
-        if isinstance(inner, dict):
+        if not isinstance(inner, dict):
+            break
+        # Unwrap if key matches section_name or is a known wrapper key
+        if key == section_name or key in ("hara_output", "bombom_output", "luna_output", "rana_decision", "hagen_output"):
             parsed_dict = inner
+            max_unwrap -= 1
+        else:
+            break
 
     # Unwrap raw_output if present
     raw_output = parsed_dict.get("raw_output")
@@ -1865,13 +1872,40 @@ def summarize_json_text_compact(raw: Optional[Any], section_name: str) -> str:
             for t in triggers:
                 if isinstance(t, dict) and "trigger" in t:
                     lines.append(f"  - {t['trigger']}")
+        # Extract copy_direction from awareness_strategy if available
+        if "awareness_strategy" in parsed_dict:
+            strategy = parsed_dict["awareness_strategy"]
+            if isinstance(strategy, dict) and "copy_direction" in strategy:
+                copy_dir = str(strategy["copy_direction"]).strip()
+                if copy_dir:
+                    lines.append(f"Tone: {copy_dir[:150]}")
 
     elif section_name == "bombom_output":
+        # Handle both shapes: list-at-root (wrapped as {"bombom_output": [...]})
+        # and dict-with-concepts-key ({"concepts": [...]})
+        concepts_list = None
         if "concepts" in parsed_dict and isinstance(parsed_dict["concepts"], list):
-            concepts = parsed_dict["concepts"][:3]
-            for i, c in enumerate(concepts, 1):
-                if isinstance(c, dict) and "headline" in c:
-                    lines.append(f"{i}. {c['headline'][:60]}")
+            # Normal shape: {"concepts": [...]}
+            concepts_list = parsed_dict["concepts"]
+        elif isinstance(parsed_dict, dict) and section_name in parsed_dict:
+            # Already unwrapped but stored under section_name key, check if it's a list
+            if isinstance(parsed_dict[section_name], list):
+                concepts_list = parsed_dict[section_name]
+        else:
+            # Edge case: if parsed_dict itself is from a root list wrap, try the first value
+            for key, val in parsed_dict.items():
+                if isinstance(val, list) and key not in ("raw_output",):
+                    concepts_list = val
+                    break
+
+        if concepts_list:
+            for i, c in enumerate(concepts_list[:3], 1):
+                if isinstance(c, dict):
+                    # Try headline first, then hook, then awareness_level as fallback
+                    headline = c.get("headline") or c.get(
+                        "hook") or c.get("awareness_level", "")
+                    if headline:
+                        lines.append(f"{i}. {str(headline)[:60]}")
 
     elif section_name == "luna_output":
         if "concepts" in parsed_dict and isinstance(parsed_dict["concepts"], list):
