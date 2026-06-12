@@ -1463,6 +1463,19 @@ def extract_provider_opts_from_context(product_context: str) -> dict[str, str] |
     return opts
 
 
+def normalize_provider_opts(opts: Optional[dict[str, str]]) -> dict[str, str] | None:
+    if not opts:
+        return None
+    provider = (opts.get("provider") or "").strip().lower()
+    if not provider:
+        return None
+    result: dict[str, str] = {"provider": provider}
+    model = (opts.get("model") or "").strip()
+    if model:
+        result["model"] = model
+    return result
+
+
 def parse_provider_opts_from_command(text: str) -> dict[str, str] | None:
     parts = text.strip().split()
     if not parts or parts[0] != "/provider":
@@ -1579,6 +1592,9 @@ async def run_rana_pipeline(
     ensure_session_capacity(session_id, user_id, added_messages=6)
     history = get_memory(session_id, user_id)
 
+    provider, model_name = validate_opts(opts)
+    opts = {"provider": provider, "model": model_name}
+
     initial_state: AgentState = {
         "session_id": session_id,
         "product_context": product_context,
@@ -1593,8 +1609,6 @@ async def run_rana_pipeline(
         "run_hagen": run_hagen,
         "opts": opts,
     }
-
-    validate_opts(opts)
 
     try:
         result = await asyncio.to_thread(compiled_graph.invoke, initial_state)
@@ -1899,7 +1913,13 @@ Additional context:
 
     provider_opts = extract_provider_opts_from_context(product_context)
     if provider_opts:
-        session["opts"] = provider_opts
+        normalized_opts = normalize_provider_opts(provider_opts)
+        try:
+            validate_opts(normalized_opts)
+        except HTTPException as exc:
+            await send_telegram_message(chat_id, format_telegram_error(exc))
+            return
+        session["opts"] = normalized_opts
 
     await send_telegram_message(chat_id, "Rana mulai memproses brief. Ini bisa butuh beberapa menit.")
     await send_telegram_message(chat_id, telegram_session_status(session))
