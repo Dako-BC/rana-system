@@ -1779,13 +1779,13 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
     return json.dumps({fallback_key: parsed}, ensure_ascii=False, indent=2)
 
 
-def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
+def summarize_json_text_compact(raw: Optional[Any], section_name: str) -> str:
     """Compact summary for Telegram: key field + top 2-3 items."""
     if raw is None:
         return ""
 
     if isinstance(raw, dict):
-        parsed = raw
+        parsed: Any = raw
     else:
         text = str(raw).strip()
         try:
@@ -1798,17 +1798,22 @@ def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
     if not isinstance(parsed, dict):
         return str(parsed)[:200]
 
+    parsed_dict: dict[str, Any] = parsed
+
     # Unwrap wrapper
-    if len(parsed) == 1:
-        key = next(iter(parsed))
-        inner = parsed.get(key)
+    if len(parsed_dict) == 1:
+        key = next(iter(parsed_dict))
+        inner = parsed_dict.get(key)
         if isinstance(inner, dict):
-            parsed = inner
+            parsed_dict = inner
 
     # Unwrap raw_output if present
-    if "raw_output" in parsed and isinstance(parsed.get("raw_output"), str):
+    raw_output = parsed_dict.get("raw_output")
+    if isinstance(raw_output, str):
         try:
-            parsed = json.loads(parsed["raw_output"])
+            loaded = json.loads(raw_output)
+            if isinstance(loaded, dict):
+                parsed_dict = loaded
         except Exception:
             pass
 
@@ -1816,39 +1821,40 @@ def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
 
     # Section-specific extraction
     if section_name == "rana_decision":
-        if "user_summary" in parsed:
-            lines.append(f"User Summary: {str(parsed['user_summary'])[:200]}")
+        if "user_summary" in parsed_dict:
+            lines.append(
+                f"User Summary: {str(parsed_dict['user_summary'])[:200]}")
 
     elif section_name == "hara_output":
-        if "awareness_level" in parsed:
+        if "awareness_level" in parsed_dict:
             lines.append(
-                f"{parsed['awareness_level']} -> {parsed.get('awareness_target', 'N/A')}")
-        if "psychological_triggers" in parsed and isinstance(parsed["psychological_triggers"], list):
-            triggers = parsed["psychological_triggers"][:2]
+                f"{parsed_dict['awareness_level']} -> {parsed_dict.get('awareness_target', 'N/A')}")
+        if "psychological_triggers" in parsed_dict and isinstance(parsed_dict["psychological_triggers"], list):
+            triggers = parsed_dict["psychological_triggers"][:2]
             for t in triggers:
                 if isinstance(t, dict) and "trigger" in t:
                     lines.append(f"  - {t['trigger']}")
 
     elif section_name == "bombom_output":
-        if "concepts" in parsed and isinstance(parsed["concepts"], list):
-            concepts = parsed["concepts"][:3]
+        if "concepts" in parsed_dict and isinstance(parsed_dict["concepts"], list):
+            concepts = parsed_dict["concepts"][:3]
             for i, c in enumerate(concepts, 1):
                 if isinstance(c, dict) and "headline" in c:
                     lines.append(f"{i}. {c['headline'][:60]}")
 
     elif section_name == "luna_output":
-        if "concepts" in parsed and isinstance(parsed["concepts"], list):
-            concepts = parsed["concepts"][:3]
+        if "concepts" in parsed_dict and isinstance(parsed_dict["concepts"], list):
+            concepts = parsed_dict["concepts"][:3]
             for i, c in enumerate(concepts, 1):
                 if isinstance(c, dict):
                     name = c.get("name") or c.get("concept_name", "Concept")
                     lines.append(f"{i}. {name}")
 
     elif section_name == "hagen_output":
-        if "execution_script" in parsed:
-            lines.append(str(parsed["execution_script"])[:150])
-        elif "script" in parsed:
-            lines.append(str(parsed["script"])[:150])
+        if "execution_script" in parsed_dict:
+            lines.append(str(parsed_dict["execution_script"])[:150])
+        elif "script" in parsed_dict:
+            lines.append(str(parsed_dict["script"])[:150])
 
     if lines:
         return "\n".join(lines)
