@@ -1781,16 +1781,22 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
 
 def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
     """Compact summary for Telegram: key field + top 2-3 items."""
-    if not raw:
+    if raw is None:
         return ""
-    text = str(raw).strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return text[:100]  # Just first 100 chars if not JSON
 
+    if isinstance(raw, dict):
+        parsed = raw
+    else:
+        text = str(raw).strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return text[:200]  # Just first 200 chars if not JSON
+
+    if isinstance(parsed, list):
+        parsed = {section_name: parsed}
     if not isinstance(parsed, dict):
-        return str(parsed)[:100]
+        return str(parsed)[:200]
 
     # Unwrap wrapper
     if len(parsed) == 1:
@@ -1806,12 +1812,12 @@ def summarize_json_text_compact(raw: Optional[str], section_name: str) -> str:
         except Exception:
             pass
 
-    lines = []
+    lines: list[str] = []
 
     # Section-specific extraction
     if section_name == "rana_decision":
         if "user_summary" in parsed:
-            lines.append(str(parsed["user_summary"])[:200])
+            lines.append(f"User Summary: {str(parsed['user_summary'])[:200]}")
 
     elif section_name == "hara_output":
         if "awareness_level" in parsed:
