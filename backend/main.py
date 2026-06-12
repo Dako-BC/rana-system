@@ -1720,9 +1720,27 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return text
-
+    # If parsed is not a dict, pretty-print and return.
     if not isinstance(parsed, dict):
         return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+    # Unwrap common top-level wrapper keys like 'rana_decision' or 'hara_output'.
+    if isinstance(parsed, dict) and len(parsed) == 1:
+        key = next(iter(parsed))
+        inner = parsed.get(key)
+        if isinstance(inner, dict):
+            parsed = inner
+
+    # If the agent returned a repair wrapper containing 'raw_output', try to parse it.
+    if isinstance(parsed, dict) and "raw_output" in parsed and isinstance(parsed.get("raw_output"), str):
+        raw_inner = parsed.get("raw_output") or ""
+        try:
+            inner = json.loads(raw_inner)
+            if isinstance(inner, dict):
+                parsed = inner
+        except Exception:
+            # leave parsed unchanged if raw_output isn't valid JSON
+            pass
 
     priority_keys = [
         "final_decision",
@@ -1732,16 +1750,31 @@ def summarize_json_text(raw: Optional[str], fallback_key: str) -> str:
         "main_pain_point",
         "winning_concept",
         "concept",
+        "concept_name",
         "headline",
         "script",
+        "awareness_level",
+        "awareness_target",
+        "top_image_ads",
+        "top_video_concepts",
+        "concepts",
+        "cta",
+        "urgency_mechanism",
     ]
-    lines = []
+
+    lines: list[str] = []
     for key in priority_keys:
         value = parsed.get(key)
         if value:
-            lines.append(f"{key.replace('_', ' ').title()}: {value}")
+            if isinstance(value, (list, dict)):
+                lines.append(
+                    f"{key.replace('_', ' ').title()}: {json.dumps(value, ensure_ascii=False)}")
+            else:
+                lines.append(f"{key.replace('_', ' ').title()}: {value}")
     if lines:
         return "\n".join(lines)
+
+    # Fallback: pretty-print the parsed dict under the fallback_key label.
     return json.dumps({fallback_key: parsed}, ensure_ascii=False, indent=2)
 
 
