@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import {
   runAgents,
@@ -30,6 +30,7 @@ const SESSION_KEY = 'rana_session_id'
 const USER_KEY = 'rana_guest_user_id'
 const SESSION_LIST_PREFIX = 'rana_session_list:'
 const SESSION_STATE_PREFIX = 'rana_session_state:'
+const USER_API_KEYS_PREFIX = 'rana_user_api_keys:'
 const POST_REGISTER_LOGOUT_KEY = 'rana_post_register_logout'
 const POST_REGISTER_NOTICE_KEY = 'rana_post_register_notice'
 const MAX_SESSIONS = 3
@@ -153,13 +154,13 @@ function getSessionTitle(state) {
 
 function mergeSessions(localSessions, cloudSessions) {
   const byId = new Map()
-  ;[...localSessions, ...cloudSessions].forEach(session => {
-    if (!session?.id) return
-    const current = byId.get(session.id)
-    if (!current || (session.updatedAt || 0) >= (current.updatedAt || 0)) {
-      byId.set(session.id, session)
-    }
-  })
+    ;[...localSessions, ...cloudSessions].forEach(session => {
+      if (!session?.id) return
+      const current = byId.get(session.id)
+      if (!current || (session.updatedAt || 0) >= (current.updatedAt || 0)) {
+        byId.set(session.id, session)
+      }
+    })
   return Array.from(byId.values())
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     .slice(0, MAX_SESSIONS)
@@ -392,6 +393,37 @@ const PROVIDER_MODELS = {
 
 const DEFAULT_PROVIDER = 'anthropic'
 const getDefaultModel = (provider) => PROVIDER_MODELS[provider]?.[0] || ''
+
+const getApiKeyStorageKey = (userId) => `${USER_API_KEYS_PREFIX}${userId || 'guest'}`
+
+function readUserApiKeys(userId) {
+  try {
+    const raw = localStorage.getItem(getApiKeyStorageKey(userId))
+    const parsed = raw ? JSON.parse(raw) : {}
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.keys(PROVIDER_MODELS)
+        .map(providerKey => [providerKey, String(parsed[providerKey] || '').trim()])
+        .filter(([, key]) => key)
+    )
+  } catch {
+    return {}
+  }
+}
+
+function writeUserApiKeys(userId, apiKeys) {
+  try {
+    const sanitized = Object.fromEntries(
+      Object.keys(PROVIDER_MODELS)
+        .map(providerKey => [providerKey, String(apiKeys?.[providerKey] || '').trim()])
+        .filter(([, key]) => key)
+    )
+    localStorage.setItem(getApiKeyStorageKey(userId), JSON.stringify(sanitized))
+    return sanitized
+  } catch {
+    return apiKeys || {}
+  }
+}
 
 const STEPS = [
   { id: 'rana_init', agent: 'rana', label: 'Rana is understanding your product and business context...' },
@@ -1506,6 +1538,132 @@ function AuthLoadingView() {
   )
 }
 
+function ApiSettingsModal({ apiKeys, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => ({ ...apiKeys }))
+  const [visibleKeys, setVisibleKeys] = useState({})
+
+  const updateKey = (providerKey, value) => {
+    setDraft(prev => ({ ...prev, [providerKey]: value }))
+  }
+
+  const clearKey = (providerKey) => {
+    setDraft(prev => {
+      const next = { ...prev }
+      delete next[providerKey]
+      return next
+    })
+  }
+
+  const configuredCount = Object.values(draft).filter(value => String(value || '').trim()).length
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="api-settings-title"
+        onClick={e => e.stopPropagation()}
+        style={{ width: 'min(720px, calc(100vw - 28px))', maxHeight: '86vh', overflow: 'auto' }}
+      >
+        <div className="confirm-modal-kicker">Settings</div>
+        <h2 id="api-settings-title">AI API keys</h2>
+        <p>
+          Provider and model choices in chat follow the API keys saved in this browser.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 18 }}>
+          {Object.entries(PROVIDER_LABELS).map(([providerKey, label]) => {
+            const hasKey = Boolean(String(draft[providerKey] || '').trim())
+            const inputType = visibleKeys[providerKey] ? 'text' : 'password'
+            return (
+              <div
+                key={providerKey}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(120px, 0.8fr) minmax(180px, 1.6fr) auto auto',
+                  gap: 8,
+                  alignItems: 'center',
+                  padding: 12,
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text)', fontWeight: 700 }}>{label}</div>
+                  <div style={{ fontSize: 11, color: hasKey ? 'var(--hara)' : 'var(--text-3)', marginTop: 3 }}>
+                    {hasKey ? 'Configured' : 'Not configured'}
+                  </div>
+                </div>
+                <input
+                  type={inputType}
+                  value={draft[providerKey] || ''}
+                  onChange={e => updateKey(providerKey, e.target.value)}
+                  placeholder={`${label} API key`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{
+                    width: '100%',
+                    minWidth: 0,
+                    background: 'var(--bg4)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    padding: '11px 12px',
+                    color: 'var(--text)',
+                    fontSize: 13,
+                    fontFamily: 'var(--font-body)',
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setVisibleKeys(prev => ({ ...prev, [providerKey]: !prev[providerKey] }))}
+                  aria-label={visibleKeys[providerKey] ? `Hide ${label} API key` : `Show ${label} API key`}
+                  title={visibleKeys[providerKey] ? 'Hide key' : 'Show key'}
+                >
+                  {visibleKeys[providerKey] ? 'Hide' : 'Show'}
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => clearKey(providerKey)}
+                  disabled={!hasKey}
+                  aria-label={`Clear ${label} API key`}
+                  title="Clear key"
+                >
+                  Clear
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="confirm-modal-actions" style={{ marginTop: 18 }}>
+          <span style={{ marginRight: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
+            {configuredCount} provider{configuredCount === 1 ? '' : 's'} configured
+          </span>
+          <button
+            type="button"
+            className="confirm-modal-secondary"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="confirm-modal-primary"
+            onClick={() => onSave(draft)}
+          >
+            Save settings
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Main app.
 function RanaApp({ authUser }) {
   const userId = authUser.uid
@@ -1513,6 +1671,8 @@ function RanaApp({ authUser }) {
   const [sessionId, setSessionId] = useState(() => getSessionId(userId))
   const sessionIdRef = useRef(sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 980)
+  const [showApiSettings, setShowApiSettings] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState(() => readUserApiKeys(userId))
   const [showNewChatWarning, setShowNewChatWarning] = useState(false)
   const savedState = useRef(readSessionState(sessionId)).current
   const didHydrateSavedState = useRef(Boolean(savedState))
@@ -1523,11 +1683,15 @@ function RanaApp({ authUser }) {
   const [uploadedFiles, setUploadedFiles] = useState(savedState?.uploadedFiles || [])
   const [sessionMessageCount, setSessionMessageCount] = useState(() => getSessionUsage(savedState))
   const [runHagen, setRunHagen] = useState(savedState?.runHagen || false)
-  const [provider, setProvider] = useState(savedState?.provider || DEFAULT_PROVIDER)
+  const initialConfiguredProviders = Object.keys(readUserApiKeys(userId))
+  const initialProvider = savedState?.provider && initialConfiguredProviders.includes(savedState.provider)
+    ? savedState.provider
+    : (initialConfiguredProviders[0] || '')
+  const [provider, setProvider] = useState(initialProvider)
   const [model, setModel] = useState(
-    savedState?.model && PROVIDER_MODELS[savedState?.provider || DEFAULT_PROVIDER]?.includes(savedState.model)
+    savedState?.model && PROVIDER_MODELS[initialProvider]?.includes(savedState.model)
       ? savedState.model
-      : getDefaultModel(savedState?.provider || DEFAULT_PROVIDER)
+      : getDefaultModel(initialProvider)
   )
   const [loading, setLoading] = useState(false)
   const [currentStep, setCurrentStep] = useState(null)
@@ -1546,6 +1710,16 @@ function RanaApp({ authUser }) {
   const didInitialCloudSync = useRef(false)
   const skipNextPersist = useRef(false)
   const backendHistoryEnabled = !isFirebaseConfigured
+  const configuredProviders = useMemo(
+    () => Object.keys(PROVIDER_MODELS).filter(providerKey => Boolean(userApiKeys[providerKey])),
+    [userApiKeys]
+  )
+  const providerOptions = useMemo(
+    () => Object.entries(PROVIDER_LABELS).filter(([providerKey]) => configuredProviders.includes(providerKey)),
+    [configuredProviders]
+  )
+  const selectedProviderKey = provider && userApiKeys[provider] ? { [provider]: userApiKeys[provider] } : {}
+  const hasConfiguredProvider = configuredProviders.length > 0
 
   const saveBackendHistoryIfEnabled = useCallback((sessions, states) => {
     if (!backendHistoryEnabled) return Promise.resolve({ status: 'skipped' })
@@ -1558,6 +1732,7 @@ function RanaApp({ authUser }) {
 
   useEffect(() => {
     setSessionList(readSessionList(userId))
+    setUserApiKeys(readUserApiKeys(userId))
   }, [userId])
 
   const buildProductContext = () => `
@@ -1646,26 +1821,45 @@ Additional notes: ${wizardForm.catatan}
   }, [sessionId, productContext, wizardStep, wizardForm, uploadedFiles, sessionMessageCount, runHagen, provider, model, result, additionalInput, loading, userId, historyReady, persistSession])
 
   useEffect(() => {
+    if (!configuredProviders.length) {
+      if (provider) setProvider('')
+      if (model) setModel('')
+      return
+    }
+
+    if (!provider || !configuredProviders.includes(provider)) {
+      const nextProvider = configuredProviders[0]
+      setProvider(nextProvider)
+      setModel(getDefaultModel(nextProvider))
+      return
+    }
+
     if (!PROVIDER_MODELS[provider]?.includes(model)) {
       setModel(getDefaultModel(provider))
     }
-  }, [provider, model])
+  }, [configuredProviders, provider, model])
 
   useEffect(() => {
     const fetchAvailability = async () => {
       try {
-        const data = await getModelAvailability()
+        const data = await getModelAvailability(userApiKeys)
         setModelAvailability(data.availabilities)
       } catch (e) {
         console.warn('Failed to fetch model availability:', e)
       }
     }
     fetchAvailability()
-  }, [])
+  }, [userApiKeys])
 
   const handleFormChange = (field, value) => {
     setWizardForm(prev => ({ ...prev, [field]: value }))
   }
+
+  const handleSaveApiKeys = useCallback((nextApiKeys) => {
+    const sanitized = writeUserApiKeys(userId, nextApiKeys)
+    setUserApiKeys(sanitized)
+    setShowApiSettings(false)
+  }, [userId])
 
   const togglePlatform = (platform) => {
     setWizardForm(prev => ({
@@ -1826,8 +2020,8 @@ Additional notes: ${wizardForm.catatan}
           const nextSessionId = canonicalSessions.some(session => session.id === sessionIdRef.current)
             ? sessionIdRef.current
             : canonicalSessions.some(session => session.id === activeId)
-            ? activeId
-            : canonicalSessions[0].id
+              ? activeId
+              : canonicalSessions[0].id
 
           writeSessionList(userId, canonicalSessions)
           setSessionList(canonicalSessions)
@@ -2011,8 +2205,8 @@ Additional notes: ${wizardForm.catatan}
   )
   const stepThreeValid = wizardForm.platform.length > 0
   const canProceed = wizardStep === 1 ? stepOneValid : wizardStep === 2 ? stepTwoValid : true
-  const canRun = stepOneValid && stepTwoValid && stepThreeValid
-  const canContinue = isMeaningfulText(additionalInput, 8)
+  const canRun = stepOneValid && stepTwoValid && stepThreeValid && hasConfiguredProvider && Boolean(provider) && Boolean(model)
+  const canContinue = isMeaningfulText(additionalInput, 8) && hasConfiguredProvider && Boolean(provider) && Boolean(model)
   const activeSessionState = { productContext, wizardForm, uploadedFiles, sessionMessageCount, additionalInput, result }
   const sessionUsage = getSessionUsage(activeSessionState)
   const sessionUsagePercent = getSessionUsagePercent(sessionUsage)
@@ -2050,6 +2244,10 @@ Additional notes: ${wizardForm.catatan}
   }, [stepList])
 
   const handleRun = async () => {
+    if (!hasConfiguredProvider || !provider || !model) {
+      setError('Add an API key in Settings to choose a model before running Rana.')
+      return
+    }
     if (!canRun || getMeaningfulLength(productContext) < 30) {
       setError('Product input is still too short. Fill in product name, category, advantage, target buyer, pain point, price, and platform with clearer context.')
       return
@@ -2062,7 +2260,7 @@ Additional notes: ${wizardForm.catatan}
 
     try {
       const [data] = await Promise.all([
-        runAgents({ sessionId, userId, productContext, runHagen, opts: { provider, model } }),
+        runAgents({ sessionId, userId, productContext, runHagen, opts: { provider, model }, apiKeys: userApiKeys }),
         simulateSteps()
       ])
       setResult(data)
@@ -2088,6 +2286,10 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleContinue = async () => {
+    if (!hasConfiguredProvider || !provider || !model) {
+      setError('Add an API key in Settings to choose a model before continuing this session.')
+      return
+    }
     if (sessionLimitReached) {
       setError('This session is already too long. Start a new conversation from the sidebar so the agents have a cleaner context and quota lasts longer.')
       return
@@ -2104,7 +2306,7 @@ Additional notes: ${wizardForm.catatan}
     try {
       const note = additionalInput.trim()
       const [data] = await Promise.all([
-        continueSession({ sessionId, userId, productContext, additionalInput: note, runHagen, opts: { provider, model } }),
+        continueSession({ sessionId, userId, productContext, additionalInput: note, runHagen, opts: { provider, model }, apiKeys: userApiKeys }),
         simulateSteps()
       ])
       setResult(data)
@@ -2277,6 +2479,14 @@ Additional notes: ${wizardForm.catatan}
         </div>
       )}
 
+      {showApiSettings && (
+        <ApiSettingsModal
+          apiKeys={userApiKeys}
+          onSave={handleSaveApiKeys}
+          onClose={() => setShowApiSettings(false)}
+        />
+      )}
+
       {showLogoutConfirm && (
         <div className="modal-backdrop" role="presentation" onClick={() => setShowLogoutConfirm(false)}>
           <div
@@ -2362,6 +2572,18 @@ Additional notes: ${wizardForm.catatan}
           title={newChatDisabled ? 'Use the empty chat first before creating another one.' : 'Start a new chat'}
         >
           + New chat
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowApiSettings(true)}
+          style={{
+            width: '100%', marginTop: 10, padding: '10px 12px', borderRadius: 'var(--radius)',
+            border: '1px solid var(--border)', background: 'var(--bg4)', color: 'var(--text)', cursor: 'pointer',
+            fontSize: 13, fontFamily: 'var(--font-body)'
+          }}
+        >
+          ⚙ Settings
         </button>
 
         <div className="history-list">
@@ -2577,21 +2799,25 @@ Additional notes: ${wizardForm.catatan}
                     setProvider(nextProvider)
                     setModel(getDefaultModel(nextProvider))
                   }}
-                  disabled={loading}
+                  disabled={loading || !hasConfiguredProvider}
                   style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)' }}
                 >
-                  {Object.entries(PROVIDER_LABELS).map(([key, label]) => {
-                    const models = PROVIDER_MODELS[key] || []
-                    const hasAvailability = Boolean(modelAvailability?.[key])
-                    const hasAvailableModel = models.some(modelName => modelAvailability?.[key]?.[modelName]?.available)
-                    const availability = hasAvailability ? { available: hasAvailableModel, reason: 'no available model' } : null
-                    const isAvailable = hasAvailableModel
-                    return (
-                      <option key={key} value={key} disabled={hasAvailability && !hasAvailableModel}>
-                        {label} {availability ? (isAvailable ? '✓' : `✗ ${availability.reason}`) : ''}
-                      </option>
-                    )
-                  })}
+                  {hasConfiguredProvider ? (
+                    providerOptions.map(([key, label]) => {
+                      const models = PROVIDER_MODELS[key] || []
+                      const hasAvailability = Boolean(modelAvailability?.[key])
+                      const hasAvailableModel = models.some(modelName => modelAvailability?.[key]?.[modelName]?.available)
+                      const availability = hasAvailability ? { available: hasAvailableModel, reason: 'no available model' } : null
+                      const isAvailable = hasAvailableModel
+                      return (
+                        <option key={key} value={key} disabled={hasAvailability && !hasAvailableModel}>
+                          {label} {availability ? (isAvailable ? '✓' : `✗ ${availability.reason}`) : ''}
+                        </option>
+                      )
+                    })
+                  ) : (
+                    <option value="">Add an API key in Settings</option>
+                  )}
                 </select>
               </div>
               <div>
@@ -2600,10 +2826,10 @@ Additional notes: ${wizardForm.catatan}
                   id="model"
                   value={model}
                   onChange={e => setModel(e.target.value)}
-                  disabled={loading}
+                  disabled={loading || !hasConfiguredProvider || !provider}
                   style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)' }}
                 >
-                  {(PROVIDER_MODELS[provider] || []).map(value => {
+                  {provider ? (PROVIDER_MODELS[provider] || []).map(value => {
                     const availability = modelAvailability?.[provider]?.[value]
                     const isAvailable = availability?.available
                     return (
@@ -2611,10 +2837,15 @@ Additional notes: ${wizardForm.catatan}
                         {value} {availability ? (isAvailable ? '✓' : `✗ ${availability.reason}`) : ''}
                       </option>
                     )
-                  })}
+                  }) : <option value="">Select a provider first</option>}
                 </select>
               </div>
             </div>
+            {!hasConfiguredProvider && (
+              <div style={{ marginBottom: 16, padding: '10px 12px', background: 'rgba(196,168,130,0.08)', border: '1px solid rgba(196,168,130,0.2)', borderRadius: 'var(--radius)', fontSize: 12, color: 'var(--text-2)' }}>
+                Add an API key in Settings to choose a model.
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 20 }}>
               <button
@@ -2797,6 +3028,15 @@ Additional notes: ${wizardForm.catatan}
                 Enter product context in the left panel, then run the system.
                 Rana will coordinate Hara, Bombom, and Luna to deliver actionable marketing output.
               </p>
+              {!hasConfiguredProvider && (
+                <button
+                  type="button"
+                  onClick={() => setShowApiSettings(true)}
+                  style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(196,168,130,0.12)', border: '1px solid rgba(196,168,130,0.3)', borderRadius: 8, color: 'var(--rana)', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Open Settings
+                </button>
+              )}
               <div style={{ display: 'flex', gap: 8, marginTop: 24, flexWrap: 'wrap', justifyContent: 'center' }}>
                 {['Market research', 'Pain point', 'Image ads', 'Video concept'].map(t => (
                   <span key={t} style={{
@@ -2987,7 +3227,7 @@ export default function App() {
       if (user && sessionStorage.getItem(POST_REGISTER_LOGOUT_KEY) === '1') {
         setCheckingAuth(true)
         signOutFirebase()
-          .catch(() => {})
+          .catch(() => { })
           .finally(() => {
             sessionStorage.removeItem(POST_REGISTER_LOGOUT_KEY)
             setAuthUser(null)

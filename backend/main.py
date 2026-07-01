@@ -80,11 +80,7 @@ TELEGRAM_DEFAULT_RUN_HAGEN = os.environ.get("TELEGRAM_DEFAULT_RUN_HAGEN", "false
 TELEGRAM_MESSAGE_LIMIT = 3500
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    raise RuntimeError(
-        "ANTHROPIC_API_KEY was not found. Add it to backend/.env or set it before starting the backend."
-    )
-client = anthropic.Anthropic(api_key=api_key)
+client = anthropic.Anthropic(api_key=api_key) if api_key else None
 
 
 def initialize_firebase_admin() -> bool:
@@ -228,20 +224,39 @@ API_KEYS = {
 }
 
 
-def get_available_providers() -> list[str]:
-    return [provider for provider in PROVIDER_MODELS if API_KEYS.get(provider)]
+def sanitize_api_keys(api_keys: Optional[dict[str, str]] = None) -> dict[str, str]:
+    if not api_keys:
+        return {}
+    return {
+        provider.strip().lower(): key.strip()
+        for provider, key in api_keys.items()
+        if provider.strip().lower() in PROVIDER_MODELS and key and key.strip()
+    }
 
 
-def get_default_available_provider_opts() -> dict[str, str]:
-    available = get_available_providers()
+def get_provider_api_key(provider: str, api_keys: Optional[dict[str, str]] = None) -> Optional[str]:
+    user_keys = sanitize_api_keys(api_keys)
+    return user_keys.get(provider) or API_KEYS.get(provider)
+
+
+def get_available_providers(api_keys: Optional[dict[str, str]] = None) -> list[str]:
+    return [
+        provider
+        for provider in PROVIDER_MODELS
+        if get_provider_api_key(provider, api_keys)
+    ]
+
+
+def get_default_available_provider_opts(api_keys: Optional[dict[str, str]] = None) -> dict[str, str]:
+    available = get_available_providers(api_keys)
     if available:
         provider = available[0]
         return {"provider": provider, "model": DEFAULT_MODEL_BY_PROVIDER[provider]}
     return {"provider": "anthropic", "model": DEFAULT_MODEL_BY_PROVIDER["anthropic"]}
 
 
-def get_default_available_provider_model() -> tuple[str, str]:
-    opts = get_default_available_provider_opts()
+def get_default_available_provider_model(api_keys: Optional[dict[str, str]] = None) -> tuple[str, str]:
+    opts = get_default_available_provider_opts(api_keys)
     return opts["provider"], opts["model"]
 
 
@@ -254,15 +269,16 @@ def get_model(model: str, provider: str) -> str:
     return model
 
 
-async def check_anthropic_availability(model: str):
-    if not API_KEYS["anthropic"]:
+async def check_anthropic_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("anthropic")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
-                    "x-api-key": API_KEYS["anthropic"],
+                    "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
@@ -285,14 +301,15 @@ async def check_anthropic_availability(model: str):
         return {"available": False, "reason": f"Network error: {str(e)}"}
 
 
-async def check_openai_availability(model: str):
-    if not API_KEYS["openai"]:
+async def check_openai_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("openai")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {API_KEYS['openai']}"},
+                headers={"Authorization": f"Bearer {api_key}"},
                 timeout=10.0,
             )
         data = response.json()
@@ -305,15 +322,16 @@ async def check_openai_availability(model: str):
         return {"available": False, "reason": f"Error: {str(e)}"}
 
 
-async def check_grok_availability(model: str):
-    if not API_KEYS["grok"]:
+async def check_grok_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("grok")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {API_KEYS['grok']}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
@@ -335,13 +353,14 @@ async def check_grok_availability(model: str):
         return {"available": False, "reason": f"Error: {str(e)}"}
 
 
-async def check_gemini_availability(model: str):
-    if not API_KEYS["gemini"]:
+async def check_gemini_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("gemini")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEYS['gemini']}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
                 json={
                     "contents": [{"parts": [{"text": "test"}]}],
                 },
@@ -359,14 +378,15 @@ async def check_gemini_availability(model: str):
         return {"available": False, "reason": f"Error: {str(e)}"}
 
 
-async def check_openrouter_availability(model: str):
-    if not API_KEYS["openrouter"]:
+async def check_openrouter_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("openrouter")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {API_KEYS['openrouter']}"},
+                headers={"Authorization": f"Bearer {api_key}"},
                 timeout=10.0,
             )
         if response.status_code != 200:
@@ -387,15 +407,16 @@ async def check_openrouter_availability(model: str):
         return {"available": False, "reason": f"Error: {str(e)}"}
 
 
-async def check_groq_availability(model: str):
-    if not API_KEYS["groq"]:
+async def check_groq_availability(model: str, api_key: Optional[str] = None):
+    api_key = api_key or get_provider_api_key("groq")
+    if not api_key:
         return {"available": False, "reason": "API key not set"}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {API_KEYS['groq']}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
@@ -425,20 +446,24 @@ AVAILABILITY_CHECKERS = {
 }
 
 
-async def check_provider_model_availability(provider: str, model_name: str):
+async def check_provider_model_availability(
+    provider: str,
+    model_name: str,
+    api_keys: Optional[dict[str, str]] = None,
+):
     model = get_model(model_name, provider)
     checker = AVAILABILITY_CHECKERS.get(provider)
     if not checker:
         return {"available": False, "reason": "Provider not supported"}
-    return await checker(model)
+    return await checker(model, get_provider_api_key(provider, api_keys))
 
 
-async def get_all_availabilities():
+async def get_all_availabilities(api_keys: Optional[dict[str, str]] = None):
     results = {}
     for provider, models in PROVIDER_MODELS.items():
         results[provider] = {}
         for model_name in models:
-            results[provider][model_name] = await check_provider_model_availability(provider, model_name)
+            results[provider][model_name] = await check_provider_model_availability(provider, model_name, api_keys)
     return results
 
 # Memory store. The key includes user_id so future Firebase Auth users do not share sessions.
@@ -576,13 +601,21 @@ def call_claude(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
     max_continuations: int = 2,
 ) -> str:
+    resolved_key = api_key or get_provider_api_key("anthropic")
+    if not resolved_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Anthropic API key is not configured. Add an Anthropic key in Settings or configure ANTHROPIC_API_KEY."
+        )
+    claude_client = anthropic.Anthropic(api_key=resolved_key)
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
     ]
-    response = client.messages.create(
+    response = claude_client.messages.create(
         model=model,
         max_tokens=max_tokens,
         system=system,
@@ -611,7 +644,7 @@ def call_claude(
                 ),
             },
         ]
-        response = client.messages.create(
+        response = claude_client.messages.create(
             model=model,
             max_tokens=max_tokens,
             system=system,
@@ -626,16 +659,18 @@ def call_gemini(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
-    if not API_KEYS["gemini"]:
+    resolved_key = api_key or get_provider_api_key("gemini")
+    if not resolved_key:
         raise HTTPException(
             status_code=503,
             detail="GOOGLE_GEMINI_API_KEY not set. Gemini requests cannot be processed."
         )
 
     prompt_text = f"{system}\n\n{user_message}"
-    url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={API_KEYS['gemini']}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={resolved_key}"
     response = httpx.post(
         url,
         json={
@@ -669,9 +704,11 @@ def call_openrouter(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
-    if not API_KEYS["openrouter"]:
+    resolved_key = api_key or get_provider_api_key("openrouter")
+    if not resolved_key:
         raise HTTPException(
             status_code=503,
             detail="OPENROUTER_API_KEY not set. OpenRouter requests cannot be processed."
@@ -680,7 +717,7 @@ def call_openrouter(
     response = httpx.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {API_KEYS['openrouter']}",
+            "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
         },
         json={
@@ -717,9 +754,11 @@ def call_openai(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
-    if not API_KEYS["openai"]:
+    resolved_key = api_key or get_provider_api_key("openai")
+    if not resolved_key:
         raise HTTPException(
             status_code=503,
             detail="OPENAI_API_KEY not set. OpenAI requests cannot be processed."
@@ -729,7 +768,7 @@ def call_openai(
         response = httpx.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {API_KEYS['openai']}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -773,9 +812,11 @@ def call_grok(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
-    if not API_KEYS["grok"]:
+    resolved_key = api_key or get_provider_api_key("grok")
+    if not resolved_key:
         raise HTTPException(
             status_code=503,
             detail="XAI_API_KEY not set. Grok requests cannot be processed."
@@ -785,7 +826,7 @@ def call_grok(
         response = httpx.post(
             "https://api.x.ai/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {API_KEYS['grok']}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -829,9 +870,11 @@ def call_groq(
     system: str,
     user_message: str,
     model: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
-    if not API_KEYS["groq"]:
+    resolved_key = api_key or get_provider_api_key("groq")
+    if not resolved_key:
         raise HTTPException(
             status_code=503,
             detail="GROQ_API_KEY not set. Groq requests cannot be processed."
@@ -841,7 +884,7 @@ def call_groq(
         response = httpx.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {API_KEYS['groq']}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -886,21 +929,22 @@ def call_model(
     model_name: str,
     system: str,
     user_message: str,
+    api_key: Optional[str] = None,
     max_tokens: int = 5000,
 ) -> str:
     model = get_model(model_name, provider)
     if provider == "anthropic":
-        return call_claude(system, user_message, model, max_tokens=max_tokens)
+        return call_claude(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
     if provider == "gemini":
-        return call_gemini(system, user_message, model, max_tokens=max_tokens)
+        return call_gemini(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
     if provider == "openai":
-        return call_openai(system, user_message, model, max_tokens=max_tokens)
+        return call_openai(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
     if provider == "grok":
-        return call_grok(system, user_message, model, max_tokens=max_tokens)
+        return call_grok(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
     if provider == "openrouter":
-        return call_openrouter(system, user_message, model, max_tokens=max_tokens)
+        return call_openrouter(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
     if provider == "groq":
-        return call_groq(system, user_message, model, max_tokens=max_tokens)
+        return call_groq(system, user_message, model, api_key=api_key, max_tokens=max_tokens)
 
     raise HTTPException(
         status_code=400,
@@ -910,6 +954,10 @@ def call_model(
 
 def call_claude_stream(system: str, user_message: str, max_tokens: int = 5000):
     """Stream a Claude response."""
+    if client is None:
+        raise RuntimeError(
+            "Anthropic client is not configured. Set ANTHROPIC_API_KEY or provide a user API key.")
+
     messages: list[MessageParam] = [
         {"role": "user", "content": user_message}
     ]
@@ -1031,22 +1079,37 @@ def repair_truncated_json(text: str) -> str:
     return text
 
 
-def convert_to_schema_json(raw_text: str, schema_hint: str, max_tokens: int = 5000) -> str:
+def convert_to_schema_json(
+    raw_text: str,
+    schema_hint: str,
+    max_tokens: int = 5000,
+    opts: Optional[dict[str, str]] = None,
+) -> str:
     prompt = render_prompt("json_repair", {
         "SCHEMA_HINT": schema_hint,
         "RAW_OUTPUT": raw_text,
     })
-    converted = call_claude(
+    repair_opts = opts or get_default_available_provider_opts()
+    provider = repair_opts.get("provider", "anthropic")
+    model_name = repair_opts.get(
+        "model") or DEFAULT_MODEL_BY_PROVIDER[provider]
+    converted = call_model(
+        provider,
+        model_name,
         load_prompt("json_repair_system"),
         prompt,
-        DEFAULT_MODEL_BY_PROVIDER["anthropic"],
+        api_key=repair_opts.get("api_key"),
         max_tokens=max_tokens,
-        max_continuations=1,
     )
     return repair_truncated_json(strip_json_fence(converted))
 
 
-def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, max_tokens: int = 5000) -> str:
+def clean_agent_json_output(
+    raw_text: str,
+    schema_hint: Optional[str] = None,
+    max_tokens: int = 5000,
+    opts: Optional[dict[str, str]] = None,
+) -> str:
     cleaned = repair_truncated_json(strip_json_fence(raw_text))
     if is_valid_json(cleaned):
         return cleaned
@@ -1056,7 +1119,7 @@ def clean_agent_json_output(raw_text: str, schema_hint: Optional[str] = None, ma
             "Agent output is invalid JSON; converting to requested schema")
         try:
             converted = convert_to_schema_json(
-                cleaned, schema_hint, max_tokens=max_tokens)
+                cleaned, schema_hint, max_tokens=max_tokens, opts=opts)
             if is_valid_json(converted):
                 return converted
         except APIError:
@@ -1203,7 +1266,8 @@ def rana_init(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=500)
+    result = call_model(provider, model_name, system, prompt,
+                        api_key=opts.get("api_key"), max_tokens=500)
     return {"current_step": "hara", "messages": [{"role": "assistant", "content": f"[RANA] {result}"}]}
 
 
@@ -1225,9 +1289,9 @@ def hara_research(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hara"), prompt, max_tokens=1500)
+        "hara"), prompt, api_key=opts.get("api_key"), max_tokens=1500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hara"), max_tokens=1500)
+        result, load_prompt("schema_hara"), max_tokens=1500, opts=opts)
     return {"hara_output": cleaned_result, "current_step": "rana_validates_hara",
             "messages": [{"role": "assistant", "content": f"[HARA] {cleaned_result}"}]}
 
@@ -1245,7 +1309,8 @@ def rana_validate_hara(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=600)
+    result = call_model(provider, model_name, system, prompt,
+                        api_key=opts.get("api_key"), max_tokens=600)
     if not has_clear_hara_awareness(state.get("hara_output")):
         return {
             "current_step": "done",
@@ -1268,9 +1333,9 @@ def bombom_create_ads(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "bombom"), prompt, max_tokens=3000)
+        "bombom"), prompt, api_key=opts.get("api_key"), max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_bombom"), max_tokens=3000)
+        result, load_prompt("schema_bombom"), max_tokens=3000, opts=opts)
     return {"bombom_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[BOMBOM] {cleaned_result}"}]}
 
@@ -1286,9 +1351,9 @@ def luna_create_video(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "luna"), prompt, max_tokens=3000)
+        "luna"), prompt, api_key=opts.get("api_key"), max_tokens=3000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_luna"), max_tokens=3000)
+        result, load_prompt("schema_luna"), max_tokens=3000, opts=opts)
     return {"luna_output": cleaned_result,
             "messages": [{"role": "assistant", "content": f"[LUNA] {cleaned_result}"}]}
 
@@ -1307,9 +1372,10 @@ def rana_final_decision(state: AgentState) -> StateUpdate:
     opts = state.get("opts") or {}
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    result = call_model(provider, model_name, system, prompt, max_tokens=1000)
+    result = call_model(provider, model_name, system, prompt,
+                        api_key=opts.get("api_key"), max_tokens=1000)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_rana_final"), max_tokens=1000)
+        result, load_prompt("schema_rana_final"), max_tokens=1000, opts=opts)
 
     # Read the Hagen routing flag.
     run_hagen = False
@@ -1335,9 +1401,9 @@ def hagen_execute(state: AgentState) -> StateUpdate:
     provider = opts.get("provider", "anthropic")
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
     result = call_model(provider, model_name, render_prompt(
-        "hagen"), prompt, max_tokens=2500)
+        "hagen"), prompt, api_key=opts.get("api_key"), max_tokens=2500)
     cleaned_result = clean_agent_json_output(
-        result, load_prompt("schema_hagen"), max_tokens=2500)
+        result, load_prompt("schema_hagen"), max_tokens=2500, opts=opts)
     return {"hagen_output": cleaned_result, "current_step": "done",
             "messages": [{"role": "assistant", "content": f"[HAGEN] {cleaned_result}"}]}
 
@@ -1411,10 +1477,15 @@ class RunRequest(BaseModel):
     product_context: str
     run_hagen: bool = False
     opts: Optional[dict[str, str]] = None
+    api_keys: Optional[dict[str, str]] = None
 
 
 class ContinueRequest(RunRequest):
     additional_input: str
+
+
+class AvailabilityRequest(BaseModel):
+    api_keys: Optional[dict[str, str]] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -1531,11 +1602,21 @@ def validate_product_context(product_context: str) -> None:
         )
 
 
-def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
+def validate_opts(
+    opts: Optional[dict[str, str]],
+    api_keys: Optional[dict[str, str]] = None,
+) -> tuple[str, str, str]:
     opts = opts or {}
     provider = opts.get("provider")
     if not provider:
-        return get_default_available_provider_model()
+        provider, model_name = get_default_available_provider_model(api_keys)
+        resolved_key = get_provider_api_key(provider, api_keys)
+        if not resolved_key:
+            raise HTTPException(
+                status_code=400,
+                detail="No AI provider is configured. Add an API key in Settings before running Rana.",
+            )
+        return provider, model_name, resolved_key
 
     provider = provider.strip().lower()
     supported_providers = set(PROVIDER_MODELS.keys())
@@ -1547,12 +1628,13 @@ def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
                 f"Supported providers: {', '.join(sorted(supported_providers))}."
             ),
         )
-    if not API_KEYS.get(provider):
-        available = get_available_providers()
+    resolved_key = get_provider_api_key(provider, api_keys)
+    if not resolved_key:
+        available = get_available_providers(api_keys)
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Provider '{provider}' is not configured for use in Telegram. "
+                f"Provider '{provider}' is not configured. "
                 f"Use one of the available providers: {', '.join(available) or 'none configured'}."
             ),
         )
@@ -1565,7 +1647,7 @@ def validate_opts(opts: Optional[dict[str, str]]) -> tuple[str, str]:
                 f"Use one of: {', '.join(PROVIDER_MODELS[provider])}."
             ),
         )
-    return provider, model_name
+    return provider, model_name, resolved_key
 
 
 def anthropic_http_exception(api_err: APIError) -> HTTPException:
@@ -1617,13 +1699,14 @@ async def run_rana_pipeline(
     product_context: str,
     run_hagen: bool = False,
     opts: Optional[dict[str, str]] = None,
+    api_keys: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     validate_product_context(product_context)
     ensure_session_capacity(session_id, user_id, added_messages=6)
     history = get_memory(session_id, user_id)
 
-    provider, model_name = validate_opts(opts)
-    opts = {"provider": provider, "model": model_name}
+    provider, model_name, resolved_key = validate_opts(opts, api_keys)
+    opts = {"provider": provider, "model": model_name, "api_key": resolved_key}
 
     initial_state: AgentState = {
         "session_id": session_id,
@@ -2204,6 +2287,7 @@ async def run_agents(
         request.product_context,
         request.run_hagen,
         request.opts,
+        request.api_keys,
     )
 
 
@@ -2251,7 +2335,13 @@ Use this additional input to complete or revise the previous output in this sess
         "opts": request.opts,
     }
 
-    validate_opts(request.opts)
+    provider, model_name, resolved_key = validate_opts(
+        request.opts, request.api_keys)
+    initial_state["opts"] = {
+        "provider": provider,
+        "model": model_name,
+        "api_key": resolved_key,
+    }
 
     try:
         result = await asyncio.to_thread(compiled_graph.invoke, initial_state)
@@ -2416,6 +2506,17 @@ async def get_model_availability():
     """Get availability status for all model providers and models."""
     try:
         availabilities = await get_all_availabilities()
+        return {"availabilities": availabilities}
+    except Exception as e:
+        logger.exception("Error checking model availability")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/availability")
+async def post_model_availability(request: AvailabilityRequest):
+    """Get availability status using API keys supplied by the web user."""
+    try:
+        availabilities = await get_all_availabilities(request.api_keys)
         return {"availabilities": availabilities}
     except Exception as e:
         logger.exception("Error checking model availability")

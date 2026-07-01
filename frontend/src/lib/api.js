@@ -41,7 +41,7 @@ async function parseApiError(res) {
   return new Error(`${friendly}${suffix}`)
 }
 
-export async function runAgents({ sessionId, userId, productContext, runHagen = false, opts = {} }) {
+export async function runAgents({ sessionId, userId, productContext, runHagen = false, opts = {}, apiKeys = {} }) {
   const res = await fetch(apiUrl('/api/run'), {
     method: 'POST',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),
@@ -51,13 +51,14 @@ export async function runAgents({ sessionId, userId, productContext, runHagen = 
       product_context: productContext,
       run_hagen: runHagen,
       opts,
+      api_keys: apiKeys,
     }),
   })
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }
 
-export async function continueSession({ sessionId, userId, productContext, additionalInput, runHagen = false, opts = {} }) {
+export async function continueSession({ sessionId, userId, productContext, additionalInput, runHagen = false, opts = {}, apiKeys = {} }) {
   const res = await fetch(apiUrl('/api/continue'), {
     method: 'POST',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),
@@ -68,6 +69,7 @@ export async function continueSession({ sessionId, userId, productContext, addit
       additional_input: additionalInput,
       run_hagen: runHagen,
       opts,
+      api_keys: apiKeys,
     }),
   })
   if (!res.ok) throw await parseApiError(res)
@@ -128,8 +130,15 @@ export async function clearMemory(sessionId, userId) {
   return res.json()
 }
 
-export async function getModelAvailability() {
-  const res = await fetch(apiUrl('/api/availability'))
+export async function getModelAvailability(apiKeys = {}) {
+  const hasApiKeys = Object.values(apiKeys || {}).some(Boolean)
+  const res = await fetch(apiUrl('/api/availability'), hasApiKeys
+    ? {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_keys: apiKeys }),
+    }
+    : undefined)
   if (!res.ok) throw await parseApiError(res)
   return res.json()
 }
