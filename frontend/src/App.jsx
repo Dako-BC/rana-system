@@ -9,6 +9,7 @@ import {
   saveBackendHistory,
   clearMemory,
   getModelAvailability,
+  performAssetAction,
 } from './lib/api.js'
 import {
   createAccountWithEmail,
@@ -492,11 +493,41 @@ function StepTracker({ steps, currentStep, completed }) {
   )
 }
 
-function OutputCard({ agentKey, content, title }) {
+function OutputCard({ agentKey, content, title, opts = {}, apiKeys = {}, sessionId, userId }) {
   const [expanded, setExpanded] = useState(false)
   const [showAllConcepts, setShowAllConcepts] = useState(false)
+  const [assetLoadingIndex, setAssetLoadingIndex] = useState(null)
+  const [assetPrompts, setAssetPrompts] = useState({})
+  const [assetErrors, setAssetErrors] = useState({})
   const a = AGENTS[agentKey]
   const parsed = tryParseJson(content)
+
+  const handleGenerateAssetPrompt = async (conceptIndex) => {
+    const key = agentKey === 'bombom' ? 'bombom' : 'luna'
+    const action = agentKey === 'bombom' ? 'generate_image_prompt' : 'generate_video_prompt'
+    setAssetLoadingIndex(conceptIndex)
+    setAssetErrors(prev => ({ ...prev, [conceptIndex]: null }))
+    try {
+      const response = await performAssetAction({
+        sessionId,
+        userId,
+        agentKey: key,
+        action,
+        content,
+        conceptIndex,
+        opts,
+        apiKeys,
+      })
+      setAssetPrompts(prev => ({
+        ...prev,
+        [conceptIndex]: response.generated_asset_prompt || response.prompt || response.asset_prompt || response.message || ''
+      }))
+    } catch (err) {
+      setAssetErrors(prev => ({ ...prev, [conceptIndex]: err?.message || String(err) }))
+    } finally {
+      setAssetLoadingIndex(null)
+    }
+  }
 
   const renderParsedBody = () => {
     if (!parsed) return null
@@ -505,8 +536,8 @@ function OutputCard({ agentKey, content, title }) {
       const tm = parsed.target_market || {}
       const cp = parsed.core_problem || {}
       const dt = parsed.decision_trigger || {}
-      const faq = parsed.faq || []
-      const objections = parsed.objection || []
+      const faq = Array.isArray(parsed.faq) ? parsed.faq : []
+      const objections = Array.isArray(parsed.objection) ? parsed.objection : []
       const hasHaraData = (
         tm.demographics ||
         tm.psychographics ||
@@ -522,8 +553,6 @@ function OutputCard({ agentKey, content, title }) {
 
       return (
         <div className="hara-output" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-
-          {/* Target Market */}
           {(tm.demographics || tm.psychographics || tm.fb_interest_targeting?.length) && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target Market</div>
@@ -557,53 +586,28 @@ function OutputCard({ agentKey, content, title }) {
             </div>
           )}
 
-          {/* Pain Point */}
           {cp.main_pain_point && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Main Pain Point</div>
-              <div style={{ marginBottom: 8 }}>
-                {typeof cp.main_pain_point === 'string' ? (
-                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{cp.main_pain_point}</p>
-                ) : (
-                  <SummaryView data={cp.main_pain_point} />
-                )}
-              </div>
-              {cp.problem_logic && (
-                <div>
-                  {typeof cp.problem_logic === 'string' ? (
-                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{cp.problem_logic}</p>
-                  ) : (
-                    <SummaryView data={cp.problem_logic} />
-                  )}
-                </div>
+              {typeof cp.main_pain_point === 'string' ? (
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{cp.main_pain_point}</p>
+              ) : (
+                <SummaryView data={cp.main_pain_point} />
               )}
             </div>
           )}
 
-          {/* Decision Trigger */}
           {dt.trigger && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Purchase Decision Trigger</div>
-              <div style={{ marginBottom: 8 }}>
-                {typeof dt.trigger === 'string' ? (
-                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{dt.trigger}</p>
-                ) : (
-                  <SummaryView data={dt.trigger} />
-                )}
-              </div>
-              {dt.penjelasan && (
-                <div>
-                  {typeof dt.penjelasan === 'string' ? (
-                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{dt.penjelasan}</p>
-                  ) : (
-                    <SummaryView data={dt.penjelasan} />
-                  )}
-                </div>
+              {typeof dt.trigger === 'string' ? (
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.6 }}>{dt.trigger}</p>
+              ) : (
+                <SummaryView data={dt.trigger} />
               )}
             </div>
           )}
 
-          {/* FAQ */}
           {faq.length > 0 && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>FAQ</div>
@@ -632,7 +636,6 @@ function OutputCard({ agentKey, content, title }) {
             </div>
           )}
 
-          {/* Objection Handling */}
           {objections.length > 0 && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Objection Handling</div>
@@ -660,7 +663,6 @@ function OutputCard({ agentKey, content, title }) {
             </div>
           )}
 
-          {/* Insight */}
           {parsed.ad_insight && (
             <div style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Insight for Ads</div>
@@ -676,61 +678,84 @@ function OutputCard({ agentKey, content, title }) {
     }
 
     if (agentKey === 'bombom') {
-      const concepts = Array.isArray(parsed.ad_concepts) ? parsed.ad_concepts : []
-      const visibleConcepts = showAllConcepts ? concepts : concepts.slice(0, 3)
-      if (concepts.length === 0) return <SummaryView data={parsed} />
+      const concepts = Array.isArray(parsed.concepts) ? parsed.concepts : []
+      if (!concepts.length) return <SummaryView data={parsed} />
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {visibleConcepts.map((item, index) => (
-            <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Concept {index + 1}</div>
-              {item.hook && (
-                <div style={{ marginBottom: 8 }}>
-                  {typeof item.hook === 'string' ? (
-                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--bombom)' }}>{item.hook}</div>
-                  ) : (
-                    <SummaryView data={item.hook} />
-                  )}
+          {concepts.slice(0, showAllConcepts ? concepts.length : 3).map((item, index) => {
+            const assetPrompt = assetPrompts[index]
+            const assetError = assetErrors[index]
+            const isLoading = assetLoadingIndex === index
+            return (
+              <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Concept {index + 1}</div>
+                  <button
+                    onClick={() => handleGenerateAssetPrompt(index)}
+                    disabled={isLoading}
+                    style={{
+                      padding: '8px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'none', color: 'var(--bombom)', fontSize: 12, cursor: 'pointer'
+                    }}
+                  >
+                    {isLoading ? 'Generating…' : 'Generate image prompt'}
+                  </button>
                 </div>
-              )}
-              {item.visual_idea && (
-                <div style={{ marginBottom: 10 }}>
-                  {typeof item.visual_idea === 'string' ? (
-                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{item.visual_idea}</div>
-                  ) : (
-                    <SummaryView data={item.visual_idea} />
-                  )}
-                </div>
-              )}
-              {item.primary_text && (
-                <div style={{ marginBottom: 10 }}>
-                  {typeof item.primary_text === 'string' ? (
-                    <div style={{ fontSize: 13, color: 'var(--text)' }}>{item.primary_text}</div>
-                  ) : (
-                    <SummaryView data={item.primary_text} />
-                  )}
-                </div>
-              )}
-              {item.headline && (
-                <div style={{ marginTop: 10 }}>
-                  {typeof item.headline === 'string' ? (
-                    <span style={{ display: 'inline-flex', padding: '4px 10px', borderRadius: 999, background: 'rgba(196,130,130,0.12)', color: 'var(--bombom)', fontSize: 12, fontWeight: 600 }}>
-                      {item.headline}
-                    </span>
-                  ) : (
-                    <SummaryView data={item.headline} />
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                {item.hook && (
+                  <div style={{ marginBottom: 8 }}>
+                    {typeof item.hook === 'string' ? (
+                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--bombom)' }}>{item.hook}</div>
+                    ) : (
+                      <SummaryView data={item.hook} />
+                    )}
+                  </div>
+                )}
+                {item.visual_idea && (
+                  <div style={{ marginBottom: 10 }}>
+                    {typeof item.visual_idea === 'string' ? (
+                      <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{item.visual_idea}</div>
+                    ) : (
+                      <SummaryView data={item.visual_idea} />
+                    )}
+                  </div>
+                )}
+                {item.primary_text && (
+                  <div style={{ marginBottom: 10 }}>
+                    {typeof item.primary_text === 'string' ? (
+                      <div style={{ fontSize: 13, color: 'var(--text)' }}>{item.primary_text}</div>
+                    ) : (
+                      <SummaryView data={item.primary_text} />
+                    )}
+                  </div>
+                )}
+                {item.headline && (
+                  <div style={{ marginTop: 10 }}>
+                    {typeof item.headline === 'string' ? (
+                      <span style={{ display: 'inline-flex', padding: '4px 10px', borderRadius: 999, background: 'rgba(196,130,130,0.12)', color: 'var(--bombom)', fontSize: 12, fontWeight: 600 }}>
+                        {item.headline}
+                      </span>
+                    ) : (
+                      <SummaryView data={item.headline} />
+                    )}
+                  </div>
+                )}
+                {assetPrompt && (
+                  <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.16)', color: 'var(--text)', fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                    {assetPrompt}
+                  </div>
+                )}
+                {assetError && (
+                  <div style={{ marginTop: 12, color: '#f97316', fontSize: 12 }}>{assetError}</div>
+                )}
+              </div>
+            )
+          })}
           {concepts.length > 3 && (
             <button onClick={() => setShowAllConcepts(active => !active)} style={{
               alignSelf: 'flex-start', padding: '10px 14px', background: 'none', border: '1px solid var(--border)', borderRadius: 10,
               color: 'var(--text-2)', cursor: 'pointer', fontSize: 12
             }}>
-              {showAllConcepts ? `Hide some concepts` : `View all ${concepts.length} concepts`}
+              {showAllConcepts ? 'Hide some concepts' : `View all ${concepts.length} concepts`}
             </button>
           )}
         </div>
@@ -739,7 +764,7 @@ function OutputCard({ agentKey, content, title }) {
 
     if (agentKey === 'luna') {
       const videos = Array.isArray(parsed.video_concepts) ? parsed.video_concepts : []
-      if (videos.length === 0) return <SummaryView data={parsed} />
+      if (!videos.length) return <SummaryView data={parsed} />
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -747,11 +772,25 @@ function OutputCard({ agentKey, content, title }) {
             const hook = item.hook_scene || {}
             const bodyScenes = Array.isArray(item.body_scenes) ? item.body_scenes : []
             const kp = item.production_requirements || {}
+            const assetPrompt = assetPrompts[index]
+            const assetError = assetErrors[index]
+            const isLoading = assetLoadingIndex === index
             return (
               <div key={index} style={{ background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Concept {item.nomor || index + 1}</div>
-                  <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>{item.real_shoot ? 'Real Shoot' : 'Illustration'}</span>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      onClick={() => handleGenerateAssetPrompt(index)}
+                      disabled={isLoading}
+                      style={{
+                        padding: '8px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'none', color: 'var(--luna)', fontSize: 12, cursor: 'pointer'
+                      }}
+                    >
+                      {isLoading ? 'Generating…' : 'Generate video prompt'}
+                    </button>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>{item.real_shoot ? 'Real Shoot' : 'Illustration'}</span>
+                  </div>
                 </div>
                 {item.angle_konten && (
                   <div style={{ marginBottom: 12 }}>
@@ -762,8 +801,6 @@ function OutputCard({ agentKey, content, title }) {
                     )}
                   </div>
                 )}
-
-                {/* Hook scene */}
                 {hook.description && (
                   <div style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--bg)', border: '1px solid var(--border)', marginBottom: 10 }}>
                     <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', marginBottom: 4 }}>Hook ({hook.duration || '0-3 seconds'})</div>
@@ -783,8 +820,6 @@ function OutputCard({ agentKey, content, title }) {
                     )}
                   </div>
                 )}
-
-                {/* Body scenes */}
                 {bodyScenes.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
                     {bodyScenes.map((scene, sceneIndex) => (
@@ -798,7 +833,6 @@ function OutputCard({ agentKey, content, title }) {
                     ))}
                   </div>
                 )}
-
                 {(kp.talent || kp.location || kp.estimated_total_duration) && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                     {kp.talent && (
@@ -818,6 +852,14 @@ function OutputCard({ agentKey, content, title }) {
                     )}
                   </div>
                 )}
+                {assetPrompt && (
+                  <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: 'rgba(192,132,252,0.08)', border: '1px solid rgba(192,132,252,0.16)', color: 'var(--text)', fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                    {assetPrompt}
+                  </div>
+                )}
+                {assetError && (
+                  <div style={{ marginTop: 12, color: 'var(--luna)', fontSize: 12 }}>{assetError}</div>
+                )}
               </div>
             )
           })}
@@ -826,9 +868,13 @@ function OutputCard({ agentKey, content, title }) {
     }
 
     if (agentKey === 'rana') {
+      const topImageAds = Array.isArray(parsed.top_image_ads) ? parsed.top_image_ads : []
+      const topVideoConcepts = Array.isArray(parsed.top_video_concepts) ? parsed.top_video_concepts : []
+      const humanReview = Array.isArray(parsed.needs_human_review) ? parsed.needs_human_review : []
+      const nextSteps = Array.isArray(parsed.next_steps) ? parsed.next_steps : []
+
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-
           {parsed.user_summary && (
             <div style={{ padding: '14px 16px', background: 'rgba(196,168,130,0.08)', borderRadius: 8, borderLeft: '3px solid var(--rana)' }}>
               <div style={{ fontSize: 11, color: 'var(--rana)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Summary</div>
@@ -877,7 +923,7 @@ function OutputCard({ agentKey, content, title }) {
               <div style={{ fontSize: 11, color: '#ffc864', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>⚠ Needs Human Review</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {humanReview.map((item, i) => (
-                  <div key={i} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>• {item}</div>
+                  <div key={i} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>• {typeof item === 'string' ? item : <SummaryView data={item} />}</div>
                 ))}
               </div>
             </div>
@@ -890,7 +936,7 @@ function OutputCard({ agentKey, content, title }) {
                 {nextSteps.map((step, i) => (
                   <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                     <span style={{ color: 'var(--rana)', fontWeight: 700, fontSize: 13, marginTop: 1, flexShrink: 0 }}>{i + 1}.</span>
-                    <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>{step}</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>{typeof step === 'string' ? step : <SummaryView data={step} />}</span>
                   </div>
                 ))}
               </div>
@@ -922,7 +968,6 @@ function OutputCard({ agentKey, content, title }) {
               <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }}>{parsed.key_insight_for_creative_team}</p>
             </div>
           )}
-
         </div>
       )
     }
@@ -1072,7 +1117,6 @@ function OutputCard({ agentKey, content, title }) {
                 const trimmed = line.trim()
                 if (!trimmed) return <div key={i} style={{ height: 8 }} />
 
-                // Render markdown headings.
                 if (/^#{1,3}\s/.test(trimmed) || /^\*\*[^*]+\*\*:?$/.test(trimmed)) {
                   const text = trimmed.replace(/^#{1,3}\s*/, '').replace(/\*\*/g, '').replace(/:$/, '')
                   return (
@@ -1084,9 +1128,7 @@ function OutputCard({ agentKey, content, title }) {
                   )
                 }
 
-                // Render markdown tables.
                 if (/^\|/.test(trimmed) && trimmed.endsWith('|')) {
-                  // Skip separator rows (|---|---|)
                   if (/^\|[-|\s:]+\|$/.test(trimmed)) return null
                   const cells = trimmed.split('|').filter(c => c.trim())
                   return (
@@ -1100,7 +1142,6 @@ function OutputCard({ agentKey, content, title }) {
                           flex: 1, fontSize: 12, color: 'var(--text-2)',
                           padding: '0 10px', lineHeight: 1.6,
                           borderRight: ci < cells.length - 1 ? '1px solid var(--border)' : 'none',
-                          // Bold markdown **text**
                           fontWeight: /^\*\*.*\*\*$/.test(cell.trim()) ? 600 : 400,
                         }}>
                           {cell.trim().replace(/\*\*/g, '')}
@@ -1110,7 +1151,6 @@ function OutputCard({ agentKey, content, title }) {
                   )
                 }
 
-                // Render bullet rows.
                 if (/^[-•]\s/.test(trimmed)) {
                   const text = trimmed.replace(/^[-•]\s*/, '')
                   return (
@@ -1121,7 +1161,6 @@ function OutputCard({ agentKey, content, title }) {
                   )
                 }
 
-                // Render numbered rows.
                 if (/^\d+\.\s/.test(trimmed)) {
                   const [num, ...rest] = trimmed.split(/\.\s/)
                   const text = rest.join('. ')
@@ -1133,12 +1172,10 @@ function OutputCard({ agentKey, content, title }) {
                   )
                 }
 
-                // Render separators.
                 if (/^-{3,}$/.test(trimmed)) {
                   return <div key={i} style={{ height: 1, background: 'var(--border)', margin: '8px 0' }} />
                 }
 
-                // Render plain paragraphs.
                 return (
                   <p key={i} style={{ margin: 0 }}>
                     <InlineMarkdown text={trimmed} style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.7 }} />
@@ -1532,6 +1569,31 @@ function AuthLoadingView() {
             <h1>Rana</h1>
             <p>Loading account...</p>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GuestModeView({ onContinue }) {
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-mark">R</div>
+          <div>
+            <h1>Rana</h1>
+            <p>Local guest mode</p>
+          </div>
+        </div>
+        <div className="login-error">
+          Firebase is not configured. You can continue in local guest mode if the backend is running with auth disabled.
+        </div>
+        <button type="button" className="login-primary" onClick={onContinue}>
+          Continue as guest
+        </button>
+        <div style={{ marginTop: 16, fontSize: 13, color: 'var(--text-3)' }}>
+          To enable Firebase sign-in, configure <code>.env</code> from <code>.env.example</code> and restart Vite.
         </div>
       </div>
     </div>
@@ -3139,12 +3201,12 @@ Additional notes: ${wizardForm.catatan}
 
               {/* Bombom output */}
               {result.bombom_output && (
-                <OutputCard agentKey="bombom" content={result.bombom_output} title="10 image ad concepts" />
+                <OutputCard agentKey="bombom" content={result.bombom_output} title="10 image ad concepts" opts={{ provider, model }} apiKeys={userApiKeys} sessionId={sessionId} userId={userId} />
               )}
 
               {/* Luna output */}
               {result.luna_output && (
-                <OutputCard agentKey="luna" content={result.luna_output} title="Video ad concepts" />
+                <OutputCard agentKey="luna" content={result.luna_output} title="Video ad concepts" opts={{ provider, model }} apiKeys={userApiKeys} sessionId={sessionId} userId={userId} />
               )}
 
               {/* Hagen output (if exists) */}
@@ -3220,9 +3282,15 @@ Additional notes: ${wizardForm.catatan}
 
 export default function App() {
   const [authUser, setAuthUser] = useState(null)
-  const [checkingAuth, setCheckingAuth] = useState(true)
+  const [checkingAuth, setCheckingAuth] = useState(isFirebaseConfigured)
 
   useEffect(() => {
+    if (!isFirebaseConfigured) {
+      setAuthUser({ uid: getUserId(), displayName: 'Guest' })
+      setCheckingAuth(false)
+      return () => { }
+    }
+
     const unsubscribe = subscribeToAuth(user => {
       if (user && sessionStorage.getItem(POST_REGISTER_LOGOUT_KEY) === '1') {
         setCheckingAuth(true)
@@ -3242,7 +3310,11 @@ export default function App() {
   }, [])
 
   if (checkingAuth) return <AuthLoadingView />
-  if (!authUser) return <LoginView />
+  if (!authUser) {
+    return isFirebaseConfigured
+      ? <LoginView />
+      : <GuestModeView onContinue={() => setAuthUser({ uid: getUserId(), displayName: 'Guest' })} />
+  }
 
   return <RanaApp key={authUser.uid} authUser={authUser} />
 }

@@ -980,6 +980,57 @@ def strip_json_fence(text: str) -> str:
     return text.strip()
 
 
+def safe_parse_json(raw: Any) -> Optional[dict[str, Any]]:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    cleaned = strip_json_fence(raw)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r'(\{[\s\S]*\})', cleaned)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def build_bombom_asset_prompt(concept: dict[str, Any]) -> str:
+    hook = concept.get('hook', '')
+    visual_idea = concept.get('visual_idea', '')
+    primary_text = concept.get('primary_text', '')
+    headline = concept.get('headline', '')
+    return (
+        "Create a concise, high-detail image generation prompt for a creative ad visual based on the following concept. "
+        "Include subject, composition, lighting, emotion, color palette, and style cues so a designer or AI image model can produce a polished ad image. "
+        "Do not include any explanation or metadata in the final output."
+        f"\n\nHOOK: {hook}\nVISUAL IDEA: {visual_idea}\nPRIMARY TEXT: {primary_text}\nHEADLINE: {headline}"
+    )
+
+
+def build_luna_asset_prompt(concept: dict[str, Any]) -> str:
+    angle = concept.get('angle_konten', '')
+    hook = concept.get('hook_scene', {})
+    body_scenes = concept.get('body_scenes', [])
+    production = concept.get('production_requirements', {})
+    hook_description = hook.get(
+        'description', '') if isinstance(hook, dict) else ''
+    hook_dialogue = hook.get(
+        'dialogue_or_text', '') if isinstance(hook, dict) else ''
+    return (
+        "Create a concise, high-detail video storyboard prompt for a short social video ad. "
+        "Include the overall content angle, hook moment, scene progression, visual style, pacing, and production framing details. "
+        "The output should be a single text prompt suitable for a creative video concept or planning tool. "
+        "Do not include explanation or metadata."
+        f"\n\nANGLE: {angle}\nHOOK DESCRIPTION: {hook_description}\nHOOK TEXT: {hook_dialogue}\nBODY SCENES: {json.dumps(body_scenes, ensure_ascii=False)}\nPRODUCTION REQUIREMENTS: {json.dumps(production, ensure_ascii=False)}"
+    )
+
+
 def is_valid_json(text: str) -> bool:
     try:
         json.loads(text)
@@ -1492,6 +1543,17 @@ class FeedbackRequest(BaseModel):
     session_id: str
     user_id: Optional[str] = None
     feedback: str
+
+
+class ActionRequest(BaseModel):
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    agent_key: str
+    action: str
+    content: str
+    concept_index: Optional[int] = 0
+    opts: Optional[dict[str, str]] = None
+    api_keys: Optional[dict[str, str]] = None
 
 
 class HistoryPayload(BaseModel):
@@ -2446,6 +2508,63 @@ async def save_feedback(
         "timestamp": str(asyncio.get_event_loop().time())
     })
     return {"status": "saved"}
+
+
+@app.post("/api/action")
+async def perform_asset_action(
+    request: ActionRequest,
+    claims: dict[str, Any] = Depends(require_firebase_user),
+):
+    """Generate a follow-up asset prompt for Bombom or Luna output."""
+    user_id = resolve_authenticated_user_id(request.user_id, claims)
+    provider, model_name, resolved_key = validate_opts(
+        request.opts, request.api_keys)
+
+    parsed = safe_parse_json(request.content)
+    if not parsed or not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to parse agent output. Send the raw JSON output for the selected concept."
+        )
+
+    key = request.agent_key.lower().strip()
+    if key == 'bombom' and request.action == 'generate_image_prompt':
+        concepts = parsed.get('ad_concepts')
+        if not isinstance(concepts, list) or not concepts:
+            raise HTTPException(
+                status_code=400, detail="No Bombom concepts were found in the provided output.")
+        index = int(request.concept_index or 0)
+        if index < 0 or index >= len(concepts):
+            raise HTTPException(
+                status_code=400, detail="Bombom concept index is out of range.")
+        prompt = build_bombom_asset_prompt(concepts[index])
+    elif key == 'luna' and request.action == 'generate_video_prompt':
+        concepts = parsed.get('video_concepts')
+        if not isinstance(concepts, list) or not concepts:
+            raise HTTPException(
+                status_code=400, detail="No Luna video concepts were found in the provided output.")
+        index = int(request.concept_index or 0)
+        if index < 0 or index >= len(concepts):
+            raise HTTPException(
+                status_code=400, detail="Luna concept index is out of range.")
+        prompt = build_luna_asset_prompt(concepts[index])
+    else:
+        raise HTTPException(
+            status_code=400, detail="Unsupported action or agent key.")
+
+    system = (
+        "You are a creative prompt engineer. Convert the provided concept details into a clean, production-ready asset prompt. "
+        "Return only the prompt text without any additional explanation."
+    )
+
+    result_text = call_model(provider, model_name, system,
+                             prompt, api_key=resolved_key, max_tokens=500)
+    return {
+        "session_id": request.session_id,
+        "agent_key": key,
+        "concept_index": request.concept_index,
+        "generated_asset_prompt": result_text.strip(),
+    }
 
 
 @app.get("/api/history/{user_id}")

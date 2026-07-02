@@ -76,6 +76,25 @@ export async function continueSession({ sessionId, userId, productContext, addit
   return res.json()
 }
 
+export async function performAssetAction({ sessionId, userId, agentKey, action, content, conceptIndex = 0, opts = {}, apiKeys = {} }) {
+  const res = await fetch(apiUrl('/api/action'), {
+    method: 'POST',
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      session_id: sessionId,
+      user_id: userId,
+      agent_key: agentKey,
+      action,
+      content,
+      concept_index: conceptIndex,
+      opts,
+      api_keys: apiKeys,
+    }),
+  })
+  if (!res.ok) throw await parseApiError(res)
+  return res.json()
+}
+
 export async function uploadFile(sessionId, file, userId) {
   const form = new FormData()
   form.append('session_id', sessionId)
