@@ -1,0 +1,937 @@
+{
+  "timestamp": "2026-07-02T15:18:25.208371",
+  "tests": [
+    {
+      "test_name": "generated_test_1_1782980305",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.208371",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "generated_test_1_1782980305_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.208371",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2083714,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "generated_test_1_1782980305_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "generated_test_1_1782980305_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "generated_test_1_1782980305_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "hagen": {
+            "test_name": "generated_test_1_1782980305_hagen",
+            "agent": "hagen",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0007569789886474609
+        }
+      }
+    },
+    {
+      "test_name": "generated_test_2_1782980305",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.209128",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "generated_test_2_1782980305_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "generated_test_2_1782980305_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2091284,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "generated_test_2_1782980305_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.209128",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2124634,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "generated_test_2_1782980305_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.212463",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2124634,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "hagen": {
+            "test_name": "generated_test_2_1782980305_hagen",
+            "agent": "hagen",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.212463",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2124634,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0033349990844726562
+        }
+      }
+    },
+    {
+      "test_name": "generated_test_3_1782980305",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.214534",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "generated_test_3_1782980305_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.214534",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.214535,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "generated_test_3_1782980305_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.214534",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.214535,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "generated_test_3_1782980305_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.214534",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2156615,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "generated_test_3_1782980305_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.215661",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2156615,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "hagen": {
+            "test_name": "generated_test_3_1782980305_hagen",
+            "agent": "hagen",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.215661",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2156615,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0011265277862548828
+        }
+      }
+    },
+    {
+      "test_name": "edge_case_minimal_input",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.217637",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "edge_case_minimal_input_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.217637",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.217637,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "edge_case_minimal_input_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.217637",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2188084,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "edge_case_minimal_input_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.218808",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2188084,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "edge_case_minimal_input_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.219852",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.219852,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0022149085998535156
+        }
+      }
+    },
+    {
+      "test_name": "edge_case_completely_unaware_audience",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.220814",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "edge_case_completely_unaware_audience_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.220814",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2208142,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "edge_case_completely_unaware_audience_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.221808",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2218087,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "edge_case_completely_unaware_audience_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.221808",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2218087,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "edge_case_completely_unaware_audience_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.221808",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2218087,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "hagen": {
+            "test_name": "edge_case_completely_unaware_audience_hagen",
+            "agent": "hagen",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.221808",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2218087,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0025055408477783203
+        }
+      }
+    },
+    {
+      "test_name": "edge_case_most_aware_audience",
+      "type": "full_pipeline",
+      "status": "passed",
+      "timestamp": "2026-07-02T15:18:25.224326",
+      "checks": {
+        "individual_agents": {
+          "hara": {
+            "test_name": "edge_case_most_aware_audience_hara",
+            "agent": "hara",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.224326",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2243268,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "bombom": {
+            "test_name": "edge_case_most_aware_audience_bombom",
+            "agent": "bombom",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.224326",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2253218,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "luna": {
+            "test_name": "edge_case_most_aware_audience_luna",
+            "agent": "luna",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.225321",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2253218,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          },
+          "rana_decision": {
+            "test_name": "edge_case_most_aware_audience_rana_decision",
+            "agent": "rana_decision",
+            "status": "passed",
+            "timestamp": "2026-07-02T15:18:25.225321",
+            "checks": {
+              "schema": {
+                "passed": true,
+                "errors": []
+              },
+              "content": {
+                "passed": true,
+                "errors": []
+              }
+            },
+            "system_health": {
+              "timestamp": 1782980305.2253218,
+              "memory": {
+                "warning": "psutil is not installed"
+              },
+              "disk": {
+                "total_mb": 188384.99609375,
+                "available_mb": 96016.23828125
+              },
+              "process": {
+                "warning": "psutil is not installed"
+              }
+            }
+          }
+        },
+        "business_logic": {
+          "passed": true,
+          "errors": []
+        },
+        "system_health": {
+          "passed": true,
+          "errors": [],
+          "response_time_seconds": 0.0019943714141845703
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "warnings": 0
+  }
+}

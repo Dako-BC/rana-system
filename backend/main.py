@@ -261,12 +261,69 @@ def get_default_available_provider_model(api_keys: Optional[dict[str, str]] = No
 
 
 def get_model(model: str, provider: str) -> str:
-    provider_models = PROVIDER_MODELS.get(provider)
-    if not provider_models:
+    if provider not in PROVIDER_MODELS:
         raise ValueError(f"Unknown provider: {provider}")
-    if model not in provider_models:
-        raise ValueError(f"Unknown model for {provider}: {model}")
-    return model
+    model_name = str(model or "").strip()
+    if not model_name:
+        raise ValueError(f"Model is required for {provider}")
+    return model_name
+
+
+def provider_auth_headers(provider: str, api_key: str) -> dict[str, str]:
+    if provider == "anthropic":
+        return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def parse_model_ids(provider: str, payload: dict[str, Any]) -> list[str]:
+    models: list[str] = []
+    items = payload.get("data") or payload.get("models") or []
+    for item in items:
+        model_id = None
+        if isinstance(item, dict):
+            model_id = item.get("id") or item.get("name")
+            if provider == "gemini":
+                methods = item.get("supportedGenerationMethods") or []
+                if methods and "generateContent" not in methods:
+                    continue
+        else:
+            model_id = str(item)
+        if model_id:
+            models.append(str(model_id).replace("models/", "", 1))
+    return sorted(set(models))
+
+
+async def fetch_provider_models(provider: str, api_key: Optional[str] = None) -> dict[str, Any]:
+    api_key = api_key or get_provider_api_key(provider)
+    if provider not in PROVIDER_MODELS:
+        return {"ok": False, "models": [], "reason": "Provider not supported"}
+    if not api_key:
+        return {"ok": False, "models": [], "reason": "API key not set"}
+
+    urls = {
+        "anthropic": "https://api.anthropic.com/v1/models",
+        "grok": "https://api.x.ai/v1/models",
+        "openai": "https://api.openai.com/v1/models",
+        "gemini": f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+        "openrouter": "https://openrouter.ai/api/v1/models",
+        "groq": "https://api.groq.com/openai/v1/models",
+    }
+    headers = provider_auth_headers(provider, api_key) if provider != "gemini" else {}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(urls[provider], headers=headers, timeout=10.0)
+        if response.status_code in {401, 403}:
+            return {"ok": False, "models": [], "reason": "Invalid API key"}
+        if response.status_code == 429:
+            return {"ok": False, "models": [], "reason": "Rate limit exceeded"}
+        if response.status_code != 200:
+            return {"ok": False, "models": [], "reason": f"API error: {response.status_code}"}
+        models = parse_model_ids(provider, response.json())
+        if not models:
+            return {"ok": False, "models": [], "reason": "No models returned by provider"}
+        return {"ok": True, "models": models}
+    except Exception as e:
+        return {"ok": False, "models": [], "reason": f"Network error: {str(e)}"}
 
 
 async def check_anthropic_availability(model: str, api_key: Optional[str] = None):
@@ -305,21 +362,12 @@ async def check_openai_availability(model: str, api_key: Optional[str] = None):
     api_key = api_key or get_provider_api_key("openai")
     if not api_key:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=10.0,
-            )
-        data = response.json()
-        available_models = [m["id"] for m in data.get("data", [])]
-        if model in available_models:
-            return {"available": True, "quota": "Check dashboard"}
-        else:
-            return {"available": False, "reason": "Model not available"}
-    except Exception as e:
-        return {"available": False, "reason": f"Error: {str(e)}"}
+    listing = await fetch_provider_models("openai", api_key)
+    if not listing.get("ok"):
+        return {"available": False, "reason": listing.get("reason", "Unable to list models")}
+    if model in listing.get("models", []):
+        return {"available": True, "quota": "Check dashboard"}
+    return {"available": False, "reason": "Model not available for this API key"}
 
 
 async def check_grok_availability(model: str, api_key: Optional[str] = None):
@@ -382,29 +430,12 @@ async def check_openrouter_availability(model: str, api_key: Optional[str] = Non
     api_key = api_key or get_provider_api_key("openrouter")
     if not api_key:
         return {"available": False, "reason": "API key not set"}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=10.0,
-            )
-        if response.status_code != 200:
-            return {"available": False, "reason": f"API error: {response.status_code}"}
-
-        data = response.json()
-        available_models = []
-        for item in data.get("data", []) or data.get("models", []):
-            if isinstance(item, dict):
-                available_models.append(item.get("id") or item.get("name"))
-            else:
-                available_models.append(str(item))
-
-        if model in available_models:
-            return {"available": True, "quota": "Check OpenRouter dashboard"}
-        return {"available": False, "reason": "Model not available"}
-    except Exception as e:
-        return {"available": False, "reason": f"Error: {str(e)}"}
+    listing = await fetch_provider_models("openrouter", api_key)
+    if not listing.get("ok"):
+        return {"available": False, "reason": listing.get("reason", "Unable to list models")}
+    if model in listing.get("models", []):
+        return {"available": True, "quota": "Check OpenRouter dashboard"}
+    return {"available": False, "reason": "Model not available for this API key"}
 
 
 async def check_groq_availability(model: str, api_key: Optional[str] = None):
@@ -462,8 +493,20 @@ async def get_all_availabilities(api_keys: Optional[dict[str, str]] = None):
     results = {}
     for provider, models in PROVIDER_MODELS.items():
         results[provider] = {}
+        api_key = get_provider_api_key(provider, api_keys)
+        listing = await fetch_provider_models(provider, api_key)
+        if listing.get("ok"):
+            for model_name in listing.get("models", []):
+                results[provider][model_name] = {"available": True, "quota": "Check provider dashboard"}
+            continue
+        reason = listing.get("reason", "Unable to list models")
+        if reason not in {"API key not set", "Invalid API key", "Rate limit exceeded"}:
+            for model_name in models:
+                results[provider][model_name] = await check_provider_model_availability(
+                    provider, model_name, api_keys)
+            continue
         for model_name in models:
-            results[provider][model_name] = await check_provider_model_availability(provider, model_name, api_keys)
+            results[provider][model_name] = {"available": False, "reason": reason}
     return results
 
 # Memory store. The key includes user_id so future Firebase Auth users do not share sessions.
@@ -1664,21 +1707,35 @@ def validate_product_context(product_context: str) -> None:
         )
 
 
-def validate_opts(
+async def resolve_default_provider_model(
+    api_keys: Optional[dict[str, str]] = None,
+) -> tuple[str, str, str]:
+    for provider in PROVIDER_MODELS:
+        resolved_key = get_provider_api_key(provider, api_keys)
+        if not resolved_key:
+            continue
+        listing = await fetch_provider_models(provider, resolved_key)
+        if listing.get("ok") and listing.get("models"):
+            return provider, listing["models"][0], resolved_key
+        fallback_model = DEFAULT_MODEL_BY_PROVIDER[provider]
+        availability = await check_provider_model_availability(
+            provider, fallback_model, api_keys)
+        if availability.get("available"):
+            return provider, fallback_model, resolved_key
+    raise HTTPException(
+        status_code=400,
+        detail="No valid AI provider is configured. Add a valid API key in Settings before running Rana.",
+    )
+
+
+async def validate_opts(
     opts: Optional[dict[str, str]],
     api_keys: Optional[dict[str, str]] = None,
 ) -> tuple[str, str, str]:
     opts = opts or {}
     provider = opts.get("provider")
     if not provider:
-        provider, model_name = get_default_available_provider_model(api_keys)
-        resolved_key = get_provider_api_key(provider, api_keys)
-        if not resolved_key:
-            raise HTTPException(
-                status_code=400,
-                detail="No AI provider is configured. Add an API key in Settings before running Rana.",
-            )
-        return provider, model_name, resolved_key
+        return await resolve_default_provider_model(api_keys)
 
     provider = provider.strip().lower()
     supported_providers = set(PROVIDER_MODELS.keys())
@@ -1701,13 +1758,18 @@ def validate_opts(
             ),
         )
     model_name = opts.get("model") or DEFAULT_MODEL_BY_PROVIDER[provider]
-    if model_name not in PROVIDER_MODELS[provider]:
+    if not str(model_name or "").strip():
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Model '{model_name}' is not supported for provider '{provider}'. "
-                f"Use one of: {', '.join(PROVIDER_MODELS[provider])}."
-            ),
+            detail=f"Model is required for provider '{provider}'.",
+        )
+    availability = await check_provider_model_availability(provider, model_name, api_keys)
+    if not availability.get("available"):
+        reason = availability.get("reason", "Model is not available")
+        status_code = 401 if "invalid api key" in reason.lower() else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Provider/model validation failed for {provider}/{model_name}: {reason}.",
         )
     return provider, model_name, resolved_key
 
@@ -1767,7 +1829,7 @@ async def run_rana_pipeline(
     ensure_session_capacity(session_id, user_id, added_messages=6)
     history = get_memory(session_id, user_id)
 
-    provider, model_name, resolved_key = validate_opts(opts, api_keys)
+    provider, model_name, resolved_key = await validate_opts(opts, api_keys)
     opts = {"provider": provider, "model": model_name, "api_key": resolved_key}
 
     initial_state: AgentState = {
@@ -2230,7 +2292,7 @@ async def handle_telegram_text(chat_id: int | str, raw_user_id: str, text: str) 
             )
             return
         try:
-            validate_opts(opts)
+            await validate_opts(opts)
         except HTTPException as exc:
             await send_telegram_message(chat_id, format_telegram_error(exc))
             return
@@ -2266,7 +2328,7 @@ Additional context:
     if provider_opts:
         normalized_opts = normalize_provider_opts(provider_opts)
         try:
-            validate_opts(normalized_opts)
+            await validate_opts(normalized_opts)
         except HTTPException as exc:
             await send_telegram_message(chat_id, format_telegram_error(exc))
             return
@@ -2397,7 +2459,7 @@ Use this additional input to complete or revise the previous output in this sess
         "opts": request.opts,
     }
 
-    provider, model_name, resolved_key = validate_opts(
+    provider, model_name, resolved_key = await validate_opts(
         request.opts, request.api_keys)
     initial_state["opts"] = {
         "provider": provider,
@@ -2517,7 +2579,7 @@ async def perform_asset_action(
 ):
     """Generate a follow-up asset prompt for Bombom or Luna output."""
     user_id = resolve_authenticated_user_id(request.user_id, claims)
-    provider, model_name, resolved_key = validate_opts(
+    provider, model_name, resolved_key = await validate_opts(
         request.opts, request.api_keys)
 
     parsed = safe_parse_json(request.content)

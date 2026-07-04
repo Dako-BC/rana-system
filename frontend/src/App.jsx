@@ -393,7 +393,14 @@ const PROVIDER_MODELS = {
 }
 
 const DEFAULT_PROVIDER = 'anthropic'
-const getDefaultModel = (provider) => PROVIDER_MODELS[provider]?.[0] || ''
+const getProviderModels = (provider, availability = null) => {
+  const dynamicModels = Object.keys(availability?.[provider] || {})
+  return dynamicModels.length ? dynamicModels : (PROVIDER_MODELS[provider] || [])
+}
+const getDefaultModel = (provider, availability = null) => {
+  const models = getProviderModels(provider, availability)
+  return models.find(modelName => availability?.[provider]?.[modelName]?.available) || models[0] || ''
+}
 
 const getApiKeyStorageKey = (userId) => `${USER_API_KEYS_PREFIX}${userId || 'guest'}`
 
@@ -1603,17 +1610,33 @@ function GuestModeView({ onContinue }) {
 function ApiSettingsModal({ apiKeys, onSave, onClose }) {
   const [draft, setDraft] = useState(() => ({ ...apiKeys }))
   const [visibleKeys, setVisibleKeys] = useState({})
+  const [warning, setWarning] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const updateKey = (providerKey, value) => {
+    if (warning) setWarning('')
     setDraft(prev => ({ ...prev, [providerKey]: value }))
   }
 
   const clearKey = (providerKey) => {
+    if (warning) setWarning('')
     setDraft(prev => {
       const next = { ...prev }
       delete next[providerKey]
       return next
     })
+  }
+
+  const saveDraft = async () => {
+    setSaving(true)
+    setWarning('')
+    try {
+      await onSave(draft)
+    } catch (e) {
+      setWarning(e?.message || 'API key validation failed. Check the key and try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const configuredCount = Object.values(draft).filter(value => String(value || '').trim()).length
@@ -1633,6 +1656,23 @@ function ApiSettingsModal({ apiKeys, onSave, onClose }) {
         <p>
           Provider and model choices in chat follow the API keys saved in this browser.
         </p>
+        {warning && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 14,
+              padding: '11px 12px',
+              border: '1px solid rgba(249, 115, 22, 0.35)',
+              background: 'rgba(249, 115, 22, 0.1)',
+              color: '#fed7aa',
+              borderRadius: 'var(--radius)',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {warning}
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 18 }}>
           {Object.entries(PROVIDER_LABELS).map(([providerKey, label]) => {
@@ -1710,15 +1750,17 @@ function ApiSettingsModal({ apiKeys, onSave, onClose }) {
             type="button"
             className="confirm-modal-secondary"
             onClick={onClose}
+            disabled={saving}
           >
             Cancel
           </button>
           <button
             type="button"
             className="confirm-modal-primary"
-            onClick={() => onSave(draft)}
+            onClick={saveDraft}
+            disabled={saving}
           >
-            Save settings
+            {saving ? 'Checking...' : 'Save settings'}
           </button>
         </div>
       </div>
@@ -1751,7 +1793,7 @@ function RanaApp({ authUser }) {
     : (initialConfiguredProviders[0] || '')
   const [provider, setProvider] = useState(initialProvider)
   const [model, setModel] = useState(
-    savedState?.model && PROVIDER_MODELS[initialProvider]?.includes(savedState.model)
+    savedState?.model && initialProvider
       ? savedState.model
       : getDefaultModel(initialProvider)
   )
@@ -1779,6 +1821,10 @@ function RanaApp({ authUser }) {
   const providerOptions = useMemo(
     () => Object.entries(PROVIDER_LABELS).filter(([providerKey]) => configuredProviders.includes(providerKey)),
     [configuredProviders]
+  )
+  const providerModels = useMemo(
+    () => getProviderModels(provider, modelAvailability),
+    [provider, modelAvailability]
   )
   const selectedProviderKey = provider && userApiKeys[provider] ? { [provider]: userApiKeys[provider] } : {}
   const hasConfiguredProvider = configuredProviders.length > 0
@@ -1892,14 +1938,15 @@ Additional notes: ${wizardForm.catatan}
     if (!provider || !configuredProviders.includes(provider)) {
       const nextProvider = configuredProviders[0]
       setProvider(nextProvider)
-      setModel(getDefaultModel(nextProvider))
+      setModel(getDefaultModel(nextProvider, modelAvailability))
       return
     }
 
-    if (!PROVIDER_MODELS[provider]?.includes(model)) {
-      setModel(getDefaultModel(provider))
+    const models = getProviderModels(provider, modelAvailability)
+    if (models.length && !models.includes(model)) {
+      setModel(getDefaultModel(provider, modelAvailability))
     }
-  }, [configuredProviders, provider, model])
+  }, [configuredProviders, provider, model, modelAvailability])
 
   useEffect(() => {
     const fetchAvailability = async () => {
@@ -1918,9 +1965,48 @@ Additional notes: ${wizardForm.catatan}
   }
 
   const handleSaveApiKeys = useCallback((nextApiKeys) => {
-    const sanitized = writeUserApiKeys(userId, nextApiKeys)
-    setUserApiKeys(sanitized)
-    setShowApiSettings(false)
+    const sanitized = Object.fromEntries(
+      Object.keys(PROVIDER_MODELS)
+        .map(providerKey => [providerKey, String(nextApiKeys?.[providerKey] || '').trim()])
+        .filter(([, key]) => key)
+    )
+
+    if (!Object.keys(sanitized).length) {
+      writeUserApiKeys(userId, sanitized)
+      setUserApiKeys(sanitized)
+      setModelAvailability(null)
+      setShowApiSettings(false)
+      return
+    }
+
+    return getModelAvailability(sanitized).then(data => {
+      const availabilities = data.availabilities || {}
+      const invalidProviders = Object.keys(sanitized).filter(providerKey => {
+        const statuses = Object.values(availabilities[providerKey] || {})
+        return statuses.length > 0 && statuses.every(status => !status?.available)
+          && statuses.some(status => /invalid api key|api key not set/i.test(status?.reason || ''))
+      })
+
+      if (invalidProviders.length) {
+        const names = invalidProviders.map(providerKey => PROVIDER_LABELS[providerKey] || providerKey).join(', ')
+        throw new Error(`API key tidak valid untuk: ${names}. Cek lagi tokennya, lalu simpan ulang.`)
+      }
+
+      const unavailableProviders = Object.keys(sanitized).filter(providerKey => {
+        const statuses = Object.values(availabilities[providerKey] || {})
+        return statuses.length > 0 && statuses.every(status => !status?.available)
+      })
+
+      if (unavailableProviders.length) {
+        const names = unavailableProviders.map(providerKey => PROVIDER_LABELS[providerKey] || providerKey).join(', ')
+        throw new Error(`Key terbaca, tapi belum ada model yang bisa dipakai untuk: ${names}. Cek akses model, quota, atau billing provider.`)
+      }
+
+      const saved = writeUserApiKeys(userId, sanitized)
+      setModelAvailability(availabilities)
+      setUserApiKeys(saved)
+      setShowApiSettings(false)
+    })
   }, [userId])
 
   const togglePlatform = (platform) => {
@@ -1946,11 +2032,7 @@ Additional notes: ${wizardForm.catatan}
     setRunHagen(nextState.runHagen || false)
     const nextProvider = nextState.provider || DEFAULT_PROVIDER
     setProvider(nextProvider)
-    setModel(
-      nextState.model && PROVIDER_MODELS[nextProvider]?.includes(nextState.model)
-        ? nextState.model
-        : getDefaultModel(nextProvider)
-    )
+    setModel(nextState.model || getDefaultModel(nextProvider, modelAvailability))
     setResult(nextState.result || null)
     setAdditionalInput(nextState.additionalInput || '')
     setShowFeedback(Boolean(nextState.result))
@@ -2859,14 +2941,14 @@ Additional notes: ${wizardForm.catatan}
                   onChange={e => {
                     const nextProvider = e.target.value
                     setProvider(nextProvider)
-                    setModel(getDefaultModel(nextProvider))
+                    setModel(getDefaultModel(nextProvider, modelAvailability))
                   }}
                   disabled={loading || !hasConfiguredProvider}
                   style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)' }}
                 >
                   {hasConfiguredProvider ? (
                     providerOptions.map(([key, label]) => {
-                      const models = PROVIDER_MODELS[key] || []
+                      const models = getProviderModels(key, modelAvailability)
                       const hasAvailability = Boolean(modelAvailability?.[key])
                       const hasAvailableModel = models.some(modelName => modelAvailability?.[key]?.[modelName]?.available)
                       const availability = hasAvailability ? { available: hasAvailableModel, reason: 'no available model' } : null
@@ -2891,7 +2973,7 @@ Additional notes: ${wizardForm.catatan}
                   disabled={loading || !hasConfiguredProvider || !provider}
                   style={{ width: '100%', background: 'var(--bg4)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 14px', color: 'var(--text)', fontSize: 13, fontFamily: 'var(--font-body)' }}
                 >
-                  {provider ? (PROVIDER_MODELS[provider] || []).map(value => {
+                  {provider && providerModels.length ? providerModels.map(value => {
                     const availability = modelAvailability?.[provider]?.[value]
                     const isAvailable = availability?.available
                     return (
@@ -2899,7 +2981,7 @@ Additional notes: ${wizardForm.catatan}
                         {value} {availability ? (isAvailable ? '✓' : `✗ ${availability.reason}`) : ''}
                       </option>
                     )
-                  }) : <option value="">Select a provider first</option>}
+                  }) : <option value="">{provider ? 'No models available for this API key' : 'Select a provider first'}</option>}
                 </select>
               </div>
             </div>
