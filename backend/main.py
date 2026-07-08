@@ -269,6 +269,12 @@ def get_model(model: str, provider: str) -> str:
     return model
 
 
+def upstream_http_status(status_code: int) -> int:
+    if status_code in {400, 401, 403, 404, 422, 429, 500, 503}:
+        return status_code
+    return 502
+
+
 async def check_anthropic_availability(model: str, api_key: Optional[str] = None):
     api_key = api_key or get_provider_api_key("anthropic")
     if not api_key:
@@ -733,7 +739,7 @@ def call_openrouter(
 
     if response.status_code != 200:
         raise HTTPException(
-            status_code=502,
+            status_code=upstream_http_status(response.status_code),
             detail=(
                 f"OpenRouter API error: {response.status_code}. "
                 f"Response: {response.text}"

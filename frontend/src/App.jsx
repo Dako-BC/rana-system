@@ -1409,14 +1409,14 @@ function FeedbackBar({ sessionId, userId, onDone }) {
   )
 }
 
-function LoginView() {
+function LoginView({ initialError = '' }) {
   const [mode, setMode] = useState('login')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(initialError)
   const [notice, setNotice] = useState(() => {
     const savedNotice = sessionStorage.getItem(POST_REGISTER_NOTICE_KEY) || ''
     sessionStorage.removeItem(POST_REGISTER_NOTICE_KEY)
@@ -3283,6 +3283,7 @@ Additional notes: ${wizardForm.catatan}
 export default function App() {
   const [authUser, setAuthUser] = useState(null)
   const [checkingAuth, setCheckingAuth] = useState(isFirebaseConfigured)
+  const [authError, setAuthError] = useState('')
 
   useEffect(() => {
     if (!isFirebaseConfigured) {
@@ -3291,7 +3292,14 @@ export default function App() {
       return () => { }
     }
 
+    const authTimeout = window.setTimeout(() => {
+      setAuthError('Firebase auth is taking too long to respond. Check your connection, Firebase config, or authorized domain, then refresh.')
+      setAuthUser(null)
+      setCheckingAuth(false)
+    }, 8000)
+
     const unsubscribe = subscribeToAuth(user => {
+      window.clearTimeout(authTimeout)
       if (user && sessionStorage.getItem(POST_REGISTER_LOGOUT_KEY) === '1') {
         setCheckingAuth(true)
         signOutFirebase()
@@ -3303,16 +3311,20 @@ export default function App() {
           })
         return
       }
+      setAuthError('')
       setAuthUser(user)
       setCheckingAuth(false)
     })
-    return unsubscribe
+    return () => {
+      window.clearTimeout(authTimeout)
+      unsubscribe()
+    }
   }, [])
 
   if (checkingAuth) return <AuthLoadingView />
   if (!authUser) {
     return isFirebaseConfigured
-      ? <LoginView />
+      ? <LoginView initialError={authError} />
       : <GuestModeView onContinue={() => setAuthUser({ uid: getUserId(), displayName: 'Guest' })} />
   }
 

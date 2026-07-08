@@ -22,15 +22,18 @@ async function parseApiError(res) {
   }
 
   const isFirebaseAdminError = /firebase admin|firebase application credentials|firebase id token/i.test(detail)
+  const isRateLimitError = /429|rate.?limit|rate-limited|quota|credit|usage/i.test(detail)
   const friendlyMessages = {
     400: 'The request is invalid. Check the input and try again.',
     401: 'Not authenticated. Try refreshing the page.',
     403: 'Access denied.',
     404: 'Endpoint not found. Make sure the backend is running.',
     422: 'The submitted data does not match the expected format.',
-    429: 'AI service rate/quota limit reached. Wait a moment or check the Anthropic usage limit.',
+    429: 'AI service rate/quota limit reached. Wait a moment, switch model/provider, or add your own provider API key.',
     500: 'The server encountered an internal error. Please try again later.',
-    502: 'The AI service returned an upstream error. Check the backend terminal for details.',
+    502: isRateLimitError
+      ? 'AI service rate/quota limit reached. Wait a moment, switch model/provider, or add your own provider API key.'
+      : 'The AI service returned an upstream error. Check the backend terminal for details.',
     503: isFirebaseAdminError
       ? 'Firebase authentication is not configured on the backend. Check backend Firebase Admin environment variables.'
       : 'The backend cannot connect to the AI service right now. Check network/server connectivity.',
